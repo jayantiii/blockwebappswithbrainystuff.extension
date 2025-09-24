@@ -2,6 +2,12 @@
 
 A productivity Chrome extension that blocks distracting websites and shows interesting science, technology, and mystery articles instead. Stay focused for 20 minutes to earn a 5-minute break!
 
+## 🚀 Chrome Web Store Status
+
+**Currently under review for publication to the Google Chrome Extension Store**
+
+This extension is being reviewed by Google's team and will be available on the Chrome Web Store once approved. The review process typically takes 1-3 weeks due to the extension's use of host permissions for fetching educational content.
+
 ## Features
 
 - 🛡️ **Website Blocking**: Block distracting websites during focus sessions
