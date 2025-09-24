@@ -1,4 +1,4 @@
-# FocusGuard - Website Blocker Chrome Extension
+# Focus the Unfocus - Website Blocker Extension
 
 A productivity Chrome extension that blocks distracting websites and shows interesting science, technology, and mystery articles instead. Stay focused for 20 minutes to earn a 5-minute break!
 
