@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Focus the Unfocus",
+  "short_name": "Focus the Unfocus",
+  "version": "1.0",
+  "description": "Block distracting websites and read interesting articles instead. Stay focused for 20 minutes to earn 5 minutes of access.",
+  "offline_enabled": true,
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "webNavigation",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://en.wikipedia.org/*",
+    "https://api.spaceflightnewsapi.net/*",
+    "https://hn.algolia.com/*",
+    "https://api.quotable.io/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Focus the Unfocus"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["article.html"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

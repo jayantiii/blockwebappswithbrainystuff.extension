@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Focus the Unfocus - Interesting Articles</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="shortcut icon" href="icon.svg" type="image/svg+xml">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    .header {
+      text-align: center;
+      color: white;
+      margin-bottom: 40px;
+    }
+    
+    .header h1 {
+      font-size: 2.5rem;
+      margin-bottom: 10px;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    }
+    
+    .header p {
+      font-size: 1.2rem;
+      opacity: 0.9;
+    }
+    
+    .timer-info {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 15px;
+      padding: 20px;
+      margin-bottom: 30px;
+      text-align: center;
+      color: white;
+    }
+    
+    .timer-display {
+      font-size: 2rem;
+      font-weight: bold;
+      margin: 10px 0;
+      color: #ffd700;
+    }
+    
+    .article-card {
+      background: white;
+      border-radius: 15px;
+      padding: 30px;
+      margin-bottom: 30px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+      transition: transform 0.3s ease;
+    }
+    
+    .article-card:hover {
+      transform: translateY(-5px);
+    }
+    
+    .article-category {
+      display: inline-block;
+      background: linear-gradient(45deg, #667eea, #764ba2);
+      color: white;
+      padding: 5px 15px;
+      border-radius: 20px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      margin-bottom: 15px;
+    }
+    
+    .article-title {
+      font-size: 1.8rem;
+      color: #2c3e50;
+      margin-bottom: 15px;
+      line-height: 1.3;
+    }
+    
+    .article-content {
+      font-size: 1.1rem;
+      color: #555;
+      margin-bottom: 20px;
+    }
+    
+    .article-content p {
+      margin-bottom: 15px;
+    }
+    
+    .article-content h3 {
+      color: #2c3e50;
+      margin: 20px 0 10px 0;
+      font-size: 1.3rem;
+    }
+    
+    .article-content ul {
+      margin: 15px 0;
+      padding-left: 20px;
+    }
+    
+    .article-content li {
+      margin-bottom: 8px;
+    }
+    
+    .highlight {
+      background: linear-gradient(120deg, #a8edea 0%, #fed6e3 100%);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+    
+    .navigation {
+      text-align: center;
+      margin-top: 30px;
+    }
+
+    .controls {
+      text-align: center;
+      margin: 18px 0 22px 0;
+    }
+    
+    .btn {
+      display: inline-block;
+      padding: 12px 25px;
+      background: linear-gradient(45deg, #667eea, #764ba2);
+      color: white;
+      text-decoration: none;
+      border-radius: 25px;
+      font-weight: 500;
+      transition: all 0.3s ease;
+      margin: 0 10px;
+    }
+    
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+    }
+    
+    .btn-secondary {
+      background: linear-gradient(45deg, #ff9a9e, #fecfef);
+    }
+    
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 20px 0;
+    }
+    
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4CAF50, #45a049);
+      border-radius: 4px;
+      transition: width 0.3s ease;
+    }
+    
+    .fun-fact {
+      background: linear-gradient(120deg, #ffecd2 0%, #fcb69f 100%);
+      border-left: 4px solid #ff6b6b;
+      padding: 15px;
+      margin: 20px 0;
+      border-radius: 0 8px 8px 0;
+    }
+    
+    .fun-fact::before {
+      content: "💡 Fun Fact: ";
+      font-weight: bold;
+      color: #d63031;
+    }
+
+    /* Reader overlay */
+    .reader-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      display: none;
+      align-items: stretch;
+      justify-content: center;
+      z-index: 2000;
+      backdrop-filter: blur(2px);
+    }
+    .reader-panel {
+      width: min(1100px, 96vw);
+      height: min(85vh, 900px);
+      background: #fff;
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+      transform: translateY(20px);
+      opacity: 0;
+      transition: all 220ms ease;
+      display: flex;
+      flex-direction: column;
+    }
+    .reader-overlay.show .reader-panel {
+      transform: translateY(0);
+      opacity: 1;
+    }
+    .reader-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: #f7f8fb;
+      border-bottom: 1px solid #eceff4;
+    }
+    .reader-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .reader-btn {
+      padding: 8px 12px;
+      border: none;
+      border-radius: 8px;
+      background: #667eea;
+      color: #fff;
+      cursor: pointer;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+    .reader-btn.secondary { background: #e0e7ff; color: #2c3e50; }
+    .reader-btn:hover { transform: translateY(-1px); }
+    .reader-iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #fff;
+    }
+    .reader-fallback {
+      display: none;
+      padding: 24px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      color: #2c3e50;
+    }
+
+    /* Teaser area */
+    .teaser-card {
+      background: white;
+      border-radius: 15px;
+      padding: 24px;
+      margin-top: 20px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+      display: none;
+    }
+    .teaser-title { font-size: 1.4rem; color: #2c3e50; margin-bottom: 12px; }
+    .teaser-content p { margin: 8px 0; }
+    .teaser-actions { margin-top: 14px; display: flex; gap: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Focus the Unfocus</h1>
+      <p>Stay focused, learn something amazing!</p>
+    </div>
+    
+    <div class="timer-info">
+      <div class="timer-display" id="timerDisplay">20:00</div>
+      <div id="timerStatus">Focus Time - Keep learning!</div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressBar"></div>
+      </div>
+    </div>
+    
+    <div class="controls" id="controlsBar">
+      <button class="btn" id="newArticleBtn">New Article</button>
+      <button class="btn" id="shuffleBtn">Brain Teasers</button>
+      <button class="btn btn-secondary" id="settingsBtn">⚙️ Settings</button>
+    </div>
+    
+    <div class="article-card" id="articleCard">
+      <!-- Article content will be loaded here -->
+    </div>
+    
+    <div class="teaser-card" id="teaserCard">
+      <div class="teaser-title" id="teaserTitle">Brain Teaser</div>
+      <div class="teaser-content" id="teaserContent"></div>
+      <div class="teaser-actions" id="teaserActions"></div>
+    </div>
+  </div>
+  
+  <!-- Overlay Reader -->
+  <div class="reader-overlay" id="readerOverlay" aria-hidden="true">
+    <div class="reader-panel" role="dialog" aria-modal="true" aria-labelledby="readerTitle">
+      <div class="reader-header">
+        <div id="readerTitle" style="font-weight:600;">In-page Reader</div>
+        <div class="reader-actions">
+          <button class="reader-btn secondary" id="openInNewTabBtn">Open in new tab</button>
+          <button class="reader-btn" id="closeReaderBtn">Close</button>
+        </div>
+      </div>
+      <iframe class="reader-iframe" id="readerFrame"></iframe>
+      <div class="reader-fallback" id="readerFallback">
+        <h3>This site blocked embedding</h3>
+        <p>Some sites prevent loading inside other pages for security reasons. You can still open it in a new tab.</p>
+        <p><button class="reader-btn" id="fallbackOpenBtn">Open article</button></p>
+      </div>
+    </div>
+  </div>
+ 
+  <script src="article.js"></script>
+</body>
+</html>
