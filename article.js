@@ -34,6 +34,7 @@ class ArticleDisplay {
     this.alignTodoDock();
     window.addEventListener('resize', () => this.alignTodoDock());
     this.startSubtitleRotator();
+    this.initCalmBoard();
   }
 
   async prepareArticles() {
@@ -747,6 +748,132 @@ class ArticleDisplay {
       const top = Math.max(12, Math.round(timerRect.top));
       todo.style.top = `${top}px`;
     } catch (_) {}
+  }
+
+  // --------- Calm Drawing Board ---------
+  initCalmBoard() {
+    const calmBtn = document.getElementById('calmBtn');
+    const card = document.getElementById('calmCard');
+    const canvas = document.getElementById('calmCanvas');
+    if (!calmBtn || !card || !canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    let drawing = false;
+    let tool = 'pen';
+    let color = '#4c6ef5';
+    let size = 6;
+
+    const colorEl = document.getElementById('calmColor');
+    const sizeEl = document.getElementById('calmSize');
+    const penBtn = document.getElementById('calmPenBtn');
+    const eraserBtn = document.getElementById('calmEraserBtn');
+    const clearBtn = document.getElementById('calmClearBtn');
+    const statusEl = document.getElementById('calmStatus');
+
+    const resize = () => {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      canvas.width = Math.max(300, Math.floor(rect.width));
+      canvas.height = Math.max(180, Math.floor(rect.height));
+      try { ctx.putImageData(img, 0, 0); } catch (_) {}
+    };
+
+    const save = async () => {
+      try {
+        const data = canvas.toDataURL('image/png');
+        await chrome.storage.local.set({ calmPad: data });
+        if (statusEl) statusEl.textContent = 'Saved ✨';
+        setTimeout(() => { if (statusEl) statusEl.textContent = 'Relax and draw ✨'; }, 1000);
+      } catch (_) {}
+    };
+
+    const restore = async () => {
+      try {
+        const { calmPad } = await chrome.storage.local.get('calmPad');
+        if (calmPad) {
+          const img = new Image();
+          img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); };
+          img.src = calmPad;
+        }
+      } catch (_) {}
+    };
+
+    const getPos = (e) => {
+      const r = canvas.getBoundingClientRect();
+      const x = (e.clientX ?? e.touches?.[0]?.clientX) - r.left;
+      const y = (e.clientY ?? e.touches?.[0]?.clientY) - r.top;
+      return { x, y };
+    };
+
+    const start = (e) => {
+      drawing = true;
+      const { x, y } = getPos(e);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+    };
+    const move = (e) => {
+      if (!drawing) return;
+      const { x, y } = getPos(e);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = size;
+      ctx.strokeStyle = tool === 'pen' ? color : '#ffffff';
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    };
+    const end = async () => { if (!drawing) return; drawing = false; await save(); };
+
+    // Events
+    canvas.addEventListener('pointerdown', start);
+    canvas.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+
+    colorEl?.addEventListener('input', (e) => { color = e.target.value; });
+    sizeEl?.addEventListener('input', (e) => { size = parseInt(e.target.value || '6', 10); });
+    penBtn?.addEventListener('click', () => { tool = 'pen'; penBtn.classList.remove('btn-secondary'); eraserBtn.classList.add('btn-secondary'); });
+    eraserBtn?.addEventListener('click', () => { tool = 'eraser'; eraserBtn.classList.remove('btn-secondary'); penBtn.classList.add('btn-secondary'); });
+    clearBtn?.addEventListener('click', async () => { ctx.clearRect(0, 0, canvas.width, canvas.height); await save(); });
+
+    // Toggle card visibility
+    calmBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const showing = card.style.display === 'block';
+      card.style.display = showing ? 'none' : 'block';
+      const articleCard = document.getElementById('articleCard');
+      const teaserCard = document.getElementById('teaserCard');
+      if (!showing) {
+        // Opening calm board: hide article/teaser
+        if (articleCard) articleCard.style.display = 'none';
+        if (teaserCard) teaserCard.style.display = 'none';
+        setTimeout(() => { resize(); restore(); }, 30);
+      } else {
+        // Closing calm board: restore the appropriate view
+        if (this.isTeaserMode) {
+          if (teaserCard) {
+            teaserCard.style.display = 'block';
+          }
+          if (articleCard) articleCard.style.display = 'none';
+        } else {
+          if (articleCard) {
+            articleCard.style.display = 'block';
+          }
+          if (teaserCard) teaserCard.style.display = 'none';
+          // Ensure article content is present
+          this.displayArticle();
+        }
+      }
+    });
+
+    // Hide board when other main actions are used
+    const hideBoard = () => { if (card.style.display === 'block') card.style.display = 'none'; };
+    document.getElementById('newArticleBtn')?.addEventListener('click', hideBoard);
+    document.getElementById('shuffleBtn')?.addEventListener('click', hideBoard);
+    document.getElementById('settingsBtn')?.addEventListener('click', hideBoard);
+
+    // initial sizing on load and on resize
+    new ResizeObserver(() => resize()).observe(canvas.parentElement);
+    window.addEventListener('resize', resize);
   }
 
   async startSubtitleRotator() {
