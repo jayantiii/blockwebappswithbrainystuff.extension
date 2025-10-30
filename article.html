@@ -256,7 +256,9 @@
       margin-top: 20px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.1);
       display: none;
+      position: relative;
     }
+    .ai-badge-right { position:absolute; top:12px; right:12px; padding:4px 10px; font-size:.75rem; border-radius:999px; background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; }
     .teaser-title { font-size: 1.4rem; color: #2c3e50; margin-bottom: 12px; }
     .teaser-content p { margin: 8px 0; }
     .teaser-actions { margin-top: 14px; display: flex; gap: 10px; }
@@ -381,6 +383,7 @@
     
     
     <div class="teaser-card" id="teaserCard">
+      <span id="teaserAIBadge" class="ai-badge-right" style="display:none;">AI generated</span>
       <div class="teaser-title" id="teaserTitle">Brain Teaser</div>
       <div class="teaser-content" id="teaserContent"></div>
       <div class="teaser-actions" id="teaserActions"></div>
@@ -406,6 +409,9 @@
     </div>
   </div>
  
+  <script src="src/constants.js"></script>
+  <script src="src/utils.js"></script>
+  <script src="src/ai.js"></script>
   <script src="article.js"></script>
 </body>
 </html>

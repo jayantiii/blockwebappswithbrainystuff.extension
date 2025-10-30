@@ -1,5 +1,10 @@
 // Article display script for FocusGuard extension
 class ArticleDisplay {
+  // Timing constants
+  static FOCUS_SECONDS = 20 * 60;
+  static BREAK_SECONDS = 5 * 60;
+  static ARTICLES_CACHE_MS = 1000 * 60 * 30; // 30 minutes
+
   constructor() {
     // Will be filled dynamically from APIs or cache
     this.articles = [];
@@ -10,7 +15,7 @@ class ArticleDisplay {
       isActive: false,
       isBlocked: false,
       isPaused: false,
-      timeRemaining: 20 * 60,
+      timeRemaining: ArticleDisplay.FOCUS_SECONDS,
       sessionStartTime: null
     };
     
@@ -18,6 +23,14 @@ class ArticleDisplay {
     this.todos = [];
     
     this.init();
+  }
+
+  // ------- Small helpers -------
+  $(id) { return document.getElementById(id); }
+  on(el, evt, fn, opts) { if (el) el.addEventListener(evt, fn, opts); }
+  debounce(fn, wait = 250) {
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn.apply(this, args), wait); };
   }
   
   async init() {
@@ -74,7 +87,7 @@ class ArticleDisplay {
     const { dynamicArticles, dynamicArticlesTimestamp } = await chrome.storage.local.get([
       'dynamicArticles', 'dynamicArticlesTimestamp'
     ]);
-    const maxAgeMs = 1000 * 60 * 30; // 30 minutes cache
+    const maxAgeMs = ArticleDisplay.ARTICLES_CACHE_MS;
     if (dynamicArticles && dynamicArticlesTimestamp && (Date.now() - dynamicArticlesTimestamp) < maxAgeMs) {
       return dynamicArticles;
     }
@@ -229,8 +242,8 @@ class ArticleDisplay {
     
     const article = this.articles[this.currentArticleIndex];
     console.log('Displaying article:', article.title);
-    const articleCard = document.getElementById('articleCard');
-    const teaserCard = document.getElementById('teaserCard');
+    const articleCard = this.$('articleCard');
+    const teaserCard = this.$('teaserCard');
     if (teaserCard) teaserCard.style.display = 'none';
     if (articleCard) articleCard.style.display = 'block';
     
@@ -245,7 +258,7 @@ class ArticleDisplay {
     `;
 
     // Wire up in-page reader
-    const readInPageBtn = document.getElementById('readInPageBtn');
+    const readInPageBtn = this.$('readInPageBtn');
     if (readInPageBtn && article.sourceUrl) {
       readInPageBtn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -255,13 +268,13 @@ class ArticleDisplay {
   }
 
   openReader(title, url) {
-    const overlay = document.getElementById('readerOverlay');
-    const frame = document.getElementById('readerFrame');
-    const fallback = document.getElementById('readerFallback');
-    const readerTitle = document.getElementById('readerTitle');
-    const openInNewTabBtn = document.getElementById('openInNewTabBtn');
-    const fallbackOpenBtn = document.getElementById('fallbackOpenBtn');
-    const closeBtn = document.getElementById('closeReaderBtn');
+    const overlay = this.$('readerOverlay');
+    const frame = this.$('readerFrame');
+    const fallback = this.$('readerFallback');
+    const readerTitle = this.$('readerTitle');
+    const openInNewTabBtn = this.$('openInNewTabBtn');
+    const fallbackOpenBtn = this.$('fallbackOpenBtn');
+    const closeBtn = this.$('closeReaderBtn');
 
     if (!overlay || !frame) return;
 
@@ -322,7 +335,7 @@ class ArticleDisplay {
     }
     
     // Show loading state
-    const articleCard = document.getElementById('articleCard');
+    const articleCard = this.$('articleCard');
     if (articleCard) {
       articleCard.innerHTML = `
         <div class="article-category">Loading</div>
@@ -372,7 +385,7 @@ class ArticleDisplay {
   // --------- Teaser Mode ---------
   toggleTeaserMode() {
     this.isTeaserMode = !this.isTeaserMode;
-    const articleCard = document.getElementById('articleCard');
+    const articleCard = this.$('articleCard');
     const teaserCard = document.getElementById('teaserCard');
     const shuffleBtn = document.getElementById('shuffleBtn');
     const newBtn = document.getElementById('newArticleBtn');
@@ -392,11 +405,54 @@ class ArticleDisplay {
     }
   }
 
-  renderRandomTeaser() {
+  async renderRandomTeaser() {
+    // 1) Instantly show a predefined teaser to avoid initial delay
+    this.renderBuiltinTeaser();
+
+    // 2) In background, try to fetch from AI cache or top-up the cache
+    try {
+      const cached = await chrome.storage.local.get(['aiTeasersCache', 'aiTeasersLoading']);
+      let queue = Array.isArray(cached.aiTeasersCache) ? cached.aiTeasersCache : [];
+
+      // If we have an item ready, swap it in immediately
+      if (queue.length > 0) {
+        const ai = queue.shift();
+        await chrome.storage.local.set({ aiTeasersCache: queue });
+        if (ai && ai.question && ai.answer) {
+          const title = ai.title || 'Brain Teaser';
+          const question = ai.question;
+          const answer = (ai.answer || '').trim().toLowerCase();
+          this.renderTeaser(title, `<p>${this.escapeHtml(question)}</p>`, (inputEl, resultEl) => {
+            const val = (inputEl.value || '').trim().toLowerCase();
+            resultEl.textContent = val === answer ? 'Correct! ✅' : 'Try again ❌';
+          }, { ai: true, hint: this.makeHintFromAnswer(answer) });
+          return;
+        }
+      }
+
+      // Otherwise, top-up cache once per click if not already loading
+      if (!cached.aiTeasersLoading && typeof window.generateAiTeasers === 'function') {
+        await chrome.storage.local.set({ aiTeasersLoading: true });
+        window.generateAiTeasers(5)
+          .then(async list => {
+            if (Array.isArray(list) && list.length) {
+              await chrome.storage.local.set({ aiTeasersCache: list });
+            }
+          })
+          .finally(async () => {
+            await chrome.storage.local.set({ aiTeasersLoading: false });
+          });
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  renderBuiltinTeaser() {
     const teasers = [
       () => this.teaserMathRiddle(),
       () => this.teaserWordScramble(),
-      () => this.teaserNumberSequence()
+      () => this.teaserNumberSequence(),
+      () => this.teaserPatternLogic(),
+      () => this.teaserQuickRiddle()
     ];
     const pick = teasers[Math.floor(Math.random() * teasers.length)];
     pick();
@@ -436,15 +492,44 @@ class ArticleDisplay {
     this.renderTeaser(title, `<p>${prompt}</p>`, (inputEl, resultEl) => {
       const val = (inputEl.value || '').trim();
       resultEl.textContent = val === pick.answer ? 'Correct! ✅' : `Hint: ${pick.rule}`;
-    });
+    }, { hint: `Think: ${pick.rule}` });
   }
 
-  renderTeaser(title, html, onCheck) {
+  teaserPatternLogic() {
+    const title = 'Pattern Logic';
+    const desc = 'Find the next pair: (A,1), (C,3), (E,5), (?)';
+    const answer = 'G,7';
+    this.renderTeaser(title, `<p>${this.escapeHtml(desc)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toUpperCase().replace(/\s+/g,'');
+      resultEl.textContent = val === 'G,7' || val === 'G,7'.replace(',','') ? 'Correct! ✅' : 'Try again ❌';
+    }, { hint: 'Skip letters by 2; numbers +2' });
+  }
+
+  teaserQuickRiddle() {
+    const title = 'Quick Riddle';
+    const q = 'What has keys but can’t open locks?';
+    const answer = 'piano';
+    this.renderTeaser(title, `<p>${this.escapeHtml(q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val === answer ? 'Correct! ✅' : 'Try again ❌';
+    }, { hint: 'It makes music' });
+  }
+
+  makeHintFromAnswer(answer) {
+    if (!answer) return '';
+    const clean = String(answer).replace(/[^a-z0-9]/gi,'');
+    if (clean.length <= 2) return `Length: ${clean.length}`;
+    return `Starts with: ${clean[0].toUpperCase()}`;
+  }
+
+  renderTeaser(title, html, onCheck, options = {}) {
     const tTitle = document.getElementById('teaserTitle');
     const tContent = document.getElementById('teaserContent');
     const tActions = document.getElementById('teaserActions');
+    const aiBadge = document.getElementById('teaserAIBadge');
     if (!tTitle || !tContent || !tActions) return;
     tTitle.textContent = title;
+    if (aiBadge) aiBadge.style.display = options.ai ? 'inline-block' : 'none';
     tContent.innerHTML = html + '<p><input id="teaserInput" type="text" placeholder="Your answer" style="padding:8px 10px;border-radius:6px;border:1px solid #ddd;width:100%;max-width:320px;"></p><p id="teaserResult" style="min-height:22px;color:#2c3e50;"></p>';
     tActions.innerHTML = '';
     const checkBtn = document.createElement('button');
@@ -453,13 +538,23 @@ class ArticleDisplay {
     const nextBtn = document.createElement('button');
     nextBtn.className = 'btn btn-secondary';
     nextBtn.textContent = 'Another';
+    const hintBtn = document.createElement('button');
+    hintBtn.className = 'btn btn-secondary';
+    hintBtn.textContent = 'Hint';
     tActions.appendChild(checkBtn);
+    if (options.hint) tActions.appendChild(hintBtn);
     tActions.appendChild(nextBtn);
     checkBtn.onclick = () => {
       const inputEl = document.getElementById('teaserInput');
       const resultEl = document.getElementById('teaserResult');
       onCheck(inputEl, resultEl);
     };
+    if (options.hint) {
+      hintBtn.onclick = () => {
+        const resultEl = document.getElementById('teaserResult');
+        if (resultEl) resultEl.textContent = `Hint: ${options.hint}`;
+      };
+    }
     nextBtn.onclick = () => this.renderRandomTeaser();
   }
 
@@ -487,9 +582,9 @@ class ArticleDisplay {
   }
   
   updateTimer() {
-    const timerDisplay = document.getElementById('timerDisplay');
-    const timerStatus = document.getElementById('timerStatus');
-    const progressBar = document.getElementById('progressBar');
+    const timerDisplay = this.$('timerDisplay');
+    const timerStatus = this.$('timerStatus');
+    const progressBar = this.$('progressBar');
     
     if (!this.timerState.isActive) {
       timerDisplay.textContent = '00:00';
@@ -638,8 +733,8 @@ class ArticleDisplay {
   }
 
   wireTodoUi() {
-    const input = document.getElementById('todoInput');
-    const addBtn = document.getElementById('todoAddBtn');
+    const input = this.$('todoInput');
+    const addBtn = this.$('todoAddBtn');
     if (!input || !addBtn) return;
     const addHandler = async () => {
       const text = (input.value || '').trim();
@@ -649,8 +744,8 @@ class ArticleDisplay {
       await this.saveTodos();
       this.renderTodos();
     };
-    addBtn.addEventListener('click', (e) => { e.preventDefault(); addHandler(); });
-    input.addEventListener('keydown', (e) => {
+    this.on(addBtn, 'click', (e) => { e.preventDefault(); addHandler(); });
+    this.on(input, 'keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
         addHandler();
@@ -668,7 +763,7 @@ class ArticleDisplay {
   }
 
   renderTodos() {
-    const list = document.getElementById('todoList');
+    const list = this.$('todoList');
     if (!list) return;
     list.innerHTML = '';
     if (!Array.isArray(this.todos)) this.todos = [];
@@ -780,7 +875,7 @@ class ArticleDisplay {
       try { ctx.putImageData(img, 0, 0); } catch (_) {}
     };
 
-    const save = async () => {
+    const saveImmediate = async () => {
       try {
         const data = canvas.toDataURL('image/png');
         await chrome.storage.local.set({ calmPad: data });
@@ -788,6 +883,7 @@ class ArticleDisplay {
         setTimeout(() => { if (statusEl) statusEl.textContent = 'Relax and draw ✨'; }, 1000);
       } catch (_) {}
     };
+    const save = this.debounce(saveImmediate, 300);
 
     const restore = async () => {
       try {
@@ -834,39 +930,39 @@ class ArticleDisplay {
     const end = async () => { if (!drawing) return; drawing = false; await save(); };
 
     // Events
-    canvas.addEventListener('pointerdown', start);
-    canvas.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', end);
-    window.addEventListener('pointercancel', end);
+    this.on(canvas, 'pointerdown', start);
+    this.on(canvas, 'pointermove', move);
+    this.on(window, 'pointerup', end);
+    this.on(window, 'pointercancel', end);
 
-    colorEl?.addEventListener('input', (e) => { color = e.target.value; });
+    this.on(colorEl, 'input', (e) => { color = e.target.value; });
     document.querySelectorAll('.calm-swatch').forEach(btn => {
       btn.addEventListener('click', (ev) => {
         const c = ev.currentTarget.getAttribute('data-color');
         if (c) { color = c; if (colorEl) colorEl.value = c; }
       });
     });
-    sizeEl?.addEventListener('input', (e) => { size = parseInt(e.target.value || '6', 10); });
-    opacityEl?.addEventListener('input', (e) => { opacity = parseFloat(e.target.value || '1') || 1; });
-    penBtn?.addEventListener('click', () => {
+    this.on(sizeEl, 'input', (e) => { size = parseInt(e.target.value || '6', 10); });
+    this.on(opacityEl, 'input', (e) => { opacity = parseFloat(e.target.value || '1') || 1; });
+    this.on(penBtn, 'click', () => {
       tool = 'pen';
       penBtn.classList.remove('btn-secondary');
       eraserBtn.classList.add('btn-secondary');
     });
-    eraserBtn?.addEventListener('click', () => {
+    this.on(eraserBtn, 'click', () => {
       tool = 'eraser';
       eraserBtn.classList.remove('btn-secondary');
       penBtn.classList.add('btn-secondary');
     });
-    clearBtn?.addEventListener('click', async () => { ctx.clearRect(0, 0, canvas.width, canvas.height); await save(); });
+    this.on(clearBtn, 'click', async () => { ctx.clearRect(0, 0, canvas.width, canvas.height); await saveImmediate(); });
 
     // Toggle card visibility
-    calmBtn.addEventListener('click', (e) => {
+    this.on(calmBtn, 'click', (e) => {
       e.preventDefault();
       const showing = card.style.display === 'block';
       card.style.display = showing ? 'none' : 'block';
-      const articleCard = document.getElementById('articleCard');
-      const teaserCard = document.getElementById('teaserCard');
+      const articleCard = this.$('articleCard');
+      const teaserCard = this.$('teaserCard');
       if (!showing) {
         // Opening calm board: hide article/teaser
         if (articleCard) articleCard.style.display = 'none';
@@ -892,9 +988,9 @@ class ArticleDisplay {
 
     // Hide board when other main actions are used
     const hideBoard = () => { if (card.style.display === 'block') card.style.display = 'none'; };
-    document.getElementById('newArticleBtn')?.addEventListener('click', hideBoard);
-    document.getElementById('shuffleBtn')?.addEventListener('click', hideBoard);
-    document.getElementById('settingsBtn')?.addEventListener('click', hideBoard);
+    this.on(this.$('newArticleBtn'), 'click', hideBoard);
+    this.on(this.$('shuffleBtn'), 'click', hideBoard);
+    this.on(this.$('settingsBtn'), 'click', hideBoard);
 
     // initial sizing on load and on resize
     new ResizeObserver(() => resize()).observe(canvas.parentElement);

@@ -6,11 +6,7 @@
   "description": "Block distracting websites and read interesting articles instead. Stay focused for 20 minutes to earn 5 minutes of access.",
   "offline_enabled": true,
   "permissions": [
-    "storage",
-    "tabs",
-    "activeTab",
-    "webNavigation",
-    "notifications"
+    "storage"
   ],
   "host_permissions": [
     "https://en.wikipedia.org/*",
