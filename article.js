@@ -248,13 +248,24 @@ class ArticleDisplay {
     if (articleCard) articleCard.style.display = 'block';
     
     articleCard.innerHTML = `
-      <div class="article-category">${article.category}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div class="article-category">${article.category}</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          ${article.sourceUrl ? `<button class=\"btn\" id=\"readInPageBtn\">📰 Read in page</button>
+          <a class=\"btn btn-secondary\" href=\"${article.sourceUrl}\" target=\"_blank\" rel=\"noreferrer\">Open in new tab</a>` : ''}
+          <div id="translateControls" style="display:flex;gap:8px;align-items:center;">
+            <select id="translateLang" class="inline-select" aria-label="Translate language">
+              <option value="en">English</option>
+              <option value="es">Español</option>
+              <option value="ja">日本語</option>
+            </select>
+            <button class="btn btn-secondary" id="translateBtn">Translate</button>
+            <button class="btn btn-secondary" id="translateResetBtn" style="display:none;">Original</button>
+          </div>
+        </div>
+      </div>
       <h2 class="article-title">${article.title}</h2>
       <div class="article-content">${article.content}</div>
-      ${article.sourceUrl ? `<div style="margin-top:12px;display:flex;gap:8px;">
-        <button class="btn" id="readInPageBtn">📰 Read in page</button>
-        <a class="btn btn-secondary" href="${article.sourceUrl}" target="_blank" rel="noreferrer">Open in new tab</a>
-      </div>` : ''}
     `;
 
     // Wire up in-page reader
@@ -264,6 +275,110 @@ class ArticleDisplay {
         e.preventDefault();
         this.openReader(article.title, article.sourceUrl);
       });
+    }
+
+    // Wire translator
+    const translateBtn = document.getElementById('translateBtn');
+    const resetBtn = document.getElementById('translateResetBtn');
+    const langSel = document.getElementById('translateLang');
+    if (translateBtn && langSel) {
+      translateBtn.onclick = async () => {
+        const target = langSel.value || 'en';
+        await this.translateCurrentArticle(target);
+      };
+    }
+    if (resetBtn) {
+      resetBtn.onclick = () => this.resetTranslatedArticle();
+    }
+    // Initialize translator control state
+    this.updateTranslateControls();
+  }
+
+  async translateCurrentArticle(targetLanguage) {
+    try {
+      console.log('Translate requested ->', targetLanguage);
+      const translator = await this.getTranslator(targetLanguage);
+      if (!translator) {
+        console.warn('Translator unavailable or still downloading');
+        this.showNotification('Translator unavailable or still downloading');
+        return;
+      }
+      const contentEl = document.querySelector('#articleCard .article-content');
+      if (!contentEl) return;
+      if (!this._originalArticleHtml) this._originalArticleHtml = contentEl.innerHTML;
+      const text = contentEl.innerText || '';
+      const translated = await translator.translate(text);
+      contentEl.innerHTML = `<p>${this.escapeHtml(translated).replace(/\n+/g, '</p><p>')}</p>`;
+      const resetBtn = document.getElementById('translateResetBtn');
+      if (resetBtn) resetBtn.style.display = 'inline-block';
+    } catch (e) {
+      this.showNotification('Translation failed');
+    }
+  }
+
+  resetTranslatedArticle() {
+    const contentEl = document.querySelector('#articleCard .article-content');
+    if (!contentEl || !this._originalArticleHtml) return;
+    contentEl.innerHTML = this._originalArticleHtml;
+    const resetBtn = document.getElementById('translateResetBtn');
+    if (resetBtn) resetBtn.style.display = 'none';
+  }
+
+  async getTranslator(targetLanguage) {
+    try {
+      const T = window.ai?.translator;
+      if (!T) {
+        console.warn('window.ai.translator missing');
+        return null;
+      }
+      const caps = await T.capabilities?.();
+      console.log('Translator capabilities:', caps);
+      if (caps && caps.available === 'after-download') {
+        console.log('Translator model needs download. Trigger via user gesture and wait...');
+        this.showNotification('Downloading translation model… try again shortly');
+        return null;
+      }
+      if (caps && caps.available === 'no') {
+        console.warn('Translator not available');
+        return null;
+      }
+      return await T.create({ sourceLanguage: 'auto', targetLanguage });
+    } catch (_) { return null; }
+  }
+
+  async updateTranslateControls() {
+    const translateBtn = document.getElementById('translateBtn');
+    const resetBtn = document.getElementById('translateResetBtn');
+    const langSel = document.getElementById('translateLang');
+    const container = document.getElementById('translateControls');
+    if (!translateBtn || !langSel || !container) return;
+    const disable = (msg) => {
+      translateBtn.disabled = true;
+      langSel.disabled = true;
+      translateBtn.title = msg;
+      langSel.title = msg;
+      translateBtn.style.opacity = '0.6';
+      langSel.style.opacity = '0.6';
+    };
+    const enable = (msg) => {
+      translateBtn.disabled = false;
+      langSel.disabled = false;
+      translateBtn.title = msg || '';
+      langSel.title = msg || '';
+      translateBtn.style.opacity = '';
+      langSel.style.opacity = '';
+    };
+    try {
+      const T = window.ai?.translator;
+      if (!T) { container.style.display = 'none'; return; }
+      const caps = await T.capabilities?.();
+      if (!caps || caps.available === 'no') { container.style.display = 'none'; return; }
+      if (caps.available === 'after-download') { container.style.display = 'none'; return; }
+      enable('Translate article');
+      container.style.display = 'flex';
+      if (resetBtn) resetBtn.title = 'Show original content';
+    } catch (_) {
+      if (container) container.style.display = 'none';
     }
   }
 
@@ -852,7 +967,7 @@ class ArticleDisplay {
     const canvas = document.getElementById('calmCanvas');
     if (!calmBtn || !card || !canvas) return;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     let drawing = false;
     let tool = 'pen';
     let color = '#4c6ef5';
