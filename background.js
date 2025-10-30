@@ -67,6 +67,12 @@ class FocusGuardBackground {
   setupEventListeners() {
     // Listen for messages from popup and content scripts
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      // Ensure focusGuard is initialized before handling messages
+      if (!focusGuard) {
+        sendResponse({ success: false, error: 'Service worker not initialized' });
+        return;
+      }
+      
       switch (request.action) {
         case 'startFocusSession':
           this.startFocusSession();
@@ -212,7 +218,7 @@ class FocusGuardBackground {
 }
 
 // Initialize the background service
-const focusGuard = new FocusGuardBackground();
+let focusGuard;
 
 // Optional: set a generated icon at runtime so the toolbar isn't a gray letter
 async function setRuntimeIcon() {
@@ -239,4 +245,11 @@ async function setRuntimeIcon() {
   } catch (_) {}
 }
 
-setRuntimeIcon();
+// Initialize everything when the service worker starts
+async function initializeServiceWorker() {
+  focusGuard = new FocusGuardBackground();
+  await setRuntimeIcon();
+}
+
+// Start initialization
+initializeServiceWorker().catch(console.error);

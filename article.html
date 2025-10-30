@@ -260,15 +260,58 @@
     .teaser-title { font-size: 1.4rem; color: #2c3e50; margin-bottom: 12px; }
     .teaser-content p { margin: 8px 0; }
     .teaser-actions { margin-top: 14px; display: flex; gap: 10px; }
+
+    /* Todo list */
+    .todo-card {
+      background: white;
+      border-radius: 15px;
+      padding: 16px 16px 12px 16px;
+      margin-top: 0;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+      width: 280px;
+      position: fixed; /* anchored to viewport to sit in left gutter */
+      left: 16px; /* will be recalculated by JS */
+      top: 100px; /* will be recalculated by JS */
+      z-index: 1100;
+    }
+    .todo-header { display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px; }
+    .todo-title { font-size: 1.4rem; color: #2c3e50; font-weight: 600; }
+    .todo-input-row { display:flex; gap:8px; margin: 8px 0 10px 0; }
+    .todo-input-row input { flex:1; padding:8px 10px; border-radius:10px; border:1px solid #e5e7eb; }
+    .todo-input-row button { padding:8px 14px; border-radius:10px; border:none; background: linear-gradient(45deg, #667eea, #764ba2); color:#fff; cursor:pointer; }
+    .todo-list { list-style: none; }
+    .todo-item { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid #f1f5f9; }
+    .todo-item:last-child { border-bottom:none; }
+    .todo-text { flex:1; color:#374151; }
+    .todo-text.done { text-decoration: line-through; color: #9ca3af; }
+    .todo-actions { display:flex; gap:8px; }
+    .todo-actions button { padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
+
+    .todo-card.stacked { position: static; width: auto; margin-top: 20px; }
+    @media (max-width: 860px) {
+      .todo-card { position: static; width: auto; margin-top: 20px; }
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
       <h1>Focus the Unfocus</h1>
-      <p>Stay focused, learn something amazing!</p>
+      <p id="subtitleText" aria-live="polite">Stay focused, learn something amazing!</p>
     </div>
     
+    <div class="todo-card" id="todoCard" aria-live="polite">
+      <div class="todo-header">
+        <div class="todo-title">To‑do List</div>
+        <div style="opacity:.7; font-size:.9rem;">Keep tasks here during focus</div>
+      </div>
+      <div class="todo-input-row">
+        <input id="todoInput" type="text" placeholder="Add a task and press Enter" aria-label="Todo text">
+        <button id="todoAddBtn" aria-label="Add todo">Add</button>
+      </div>
+      <ul class="todo-list" id="todoList"></ul>
+    </div>
+
     <div class="timer-info">
       <div class="timer-display" id="timerDisplay">20:00</div>
       <div id="timerStatus">Focus Time - Keep learning!</div>
@@ -286,6 +329,7 @@
     <div class="article-card" id="articleCard">
       <!-- Article content will be loaded here -->
     </div>
+    
     
     <div class="teaser-card" id="teaserCard">
       <div class="teaser-title" id="teaserTitle">Brain Teaser</div>

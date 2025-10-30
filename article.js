@@ -14,6 +14,9 @@ class ArticleDisplay {
       sessionStartTime: null
     };
     
+    // Simple persistent todos
+    this.todos = [];
+    
     this.init();
   }
   
@@ -24,6 +27,13 @@ class ArticleDisplay {
     this.updateTimer();
     this.startTimer();
     this.setupTabVisibilityListener();
+    await this.loadTodos();
+    await this.cleanupCompletedTodosIfNeeded();
+    this.renderTodos();
+    this.wireTodoUi();
+    this.alignTodoDock();
+    window.addEventListener('resize', () => this.alignTodoDock());
+    this.startSubtitleRotator();
   }
 
   async prepareArticles() {
@@ -601,8 +611,185 @@ class ArticleDisplay {
   }
   
   openSettings() {
-    // Open the extension popup
-    chrome.runtime.sendMessage({ action: 'openPopup' });
+    // Open the extension popup in a tab to ensure it opens from this page
+    try {
+      const url = chrome.runtime.getURL('popup.html');
+      window.open(url, '_blank', 'noopener');
+    } catch (_) {
+      chrome.runtime.sendMessage({ action: 'openPopup' });
+    }
+  }
+
+  // --------- Todos (persisted) ---------
+  async loadTodos() {
+    try {
+      const { todos } = await chrome.storage.local.get('todos');
+      if (Array.isArray(todos)) {
+        this.todos = todos;
+      }
+    } catch (_) {}
+  }
+
+  async saveTodos() {
+    try {
+      await chrome.storage.local.set({ todos: this.todos });
+    } catch (_) {}
+  }
+
+  wireTodoUi() {
+    const input = document.getElementById('todoInput');
+    const addBtn = document.getElementById('todoAddBtn');
+    if (!input || !addBtn) return;
+    const addHandler = async () => {
+      const text = (input.value || '').trim();
+      if (!text) return;
+      this.addTodo(text);
+      input.value = '';
+      await this.saveTodos();
+      this.renderTodos();
+    };
+    addBtn.addEventListener('click', (e) => { e.preventDefault(); addHandler(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addHandler();
+      }
+    });
+  }
+
+  addTodo(text) {
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.todos.push({ id, text, done: false, completedAt: null });
+  }
+
+  deleteTodo(id) {
+    this.todos = this.todos.filter(x => x.id !== id);
+  }
+
+  renderTodos() {
+    const list = document.getElementById('todoList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!Array.isArray(this.todos)) this.todos = [];
+    for (const item of this.todos) {
+      const li = document.createElement('li');
+      li.className = 'todo-item';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = !!item.done;
+      checkbox.addEventListener('change', async () => {
+        item.done = checkbox.checked;
+        item.completedAt = item.done ? new Date().toDateString() : null;
+        await this.saveTodos();
+        this.renderTodos();
+      });
+
+      const span = document.createElement('span');
+      span.className = 'todo-text' + (item.done ? ' done' : '');
+      span.textContent = item.text;
+
+      const actions = document.createElement('div');
+      actions.className = 'todo-actions';
+      const del = document.createElement('button');
+      del.textContent = 'Delete';
+      del.addEventListener('click', async () => {
+        this.deleteTodo(item.id);
+        await this.saveTodos();
+        this.renderTodos();
+      });
+      actions.appendChild(del);
+
+      li.appendChild(checkbox);
+      li.appendChild(span);
+      li.appendChild(actions);
+      list.appendChild(li);
+    }
+  }
+
+  async cleanupCompletedTodosIfNeeded() {
+    try {
+      const today = new Date().toDateString();
+      const { todosLastCleanupDate } = await chrome.storage.local.get('todosLastCleanupDate');
+      if (todosLastCleanupDate === today) return;
+      this.todos = this.todos.filter(t => !(t.done && t.completedAt && t.completedAt !== today));
+      await chrome.storage.local.set({ todos: this.todos, todosLastCleanupDate: today });
+    } catch (_) {}
+  }
+
+  alignTodoDock() {
+    try {
+      const todo = document.getElementById('todoCard');
+      const timer = document.querySelector('.timer-info');
+      const container = document.querySelector('.container');
+      if (!todo || !timer || !container) return;
+
+      // On narrow screens, stack
+      if (window.matchMedia('(max-width: 860px)').matches) {
+        todo.classList.add('stacked');
+        todo.style.left = '';
+        todo.style.top = '';
+        return;
+      }
+
+      todo.classList.remove('stacked');
+
+      const containerRect = container.getBoundingClientRect();
+      const timerRect = timer.getBoundingClientRect();
+      const todoWidth = todo.offsetWidth || 280;
+
+      // Compute left so todo sits in gutter left of the container
+      const gutter = containerRect.left;
+      const desiredLeft = Math.max(8, Math.round(gutter - todoWidth - 16));
+      todo.style.left = `${desiredLeft}px`;
+
+      // Align top with timer top
+      const top = Math.max(12, Math.round(timerRect.top));
+      todo.style.top = `${top}px`;
+    } catch (_) {}
+  }
+
+  async startSubtitleRotator() {
+    try {
+      const subtitle = document.getElementById('subtitleText');
+      if (!subtitle) return;
+      // Try fetching inspirational quotes; fallback to local list
+      let quotes = [];
+      try {
+        const fetched = await this.fetchQuotes(8);
+        quotes = (fetched || []).map(q => {
+          const tmp = document.createElement('div');
+          tmp.innerHTML = q.content || '';
+          return tmp.textContent || 'Keep learning every day.';
+        });
+      } catch (_) {}
+      if (!quotes || quotes.length === 0) {
+        quotes = [
+          'Small steps, big outcomes.',
+          'Deep work beats shallow distractions.',
+          'Focus is a muscle—train it daily.',
+          'Make progress, not excuses.',
+          'Consistency compounds.',
+          'One article at a time.',
+          'Tiny gains, massive change.'
+        ];
+      }
+
+      let i = 0;
+      const setQuote = (text) => {
+        subtitle.style.transition = 'opacity 300ms ease';
+        subtitle.style.opacity = '0';
+        setTimeout(() => {
+          subtitle.textContent = text;
+          subtitle.style.opacity = '1';
+        }, 220);
+      };
+      setQuote(quotes[i % quotes.length]);
+      setInterval(() => {
+        i = (i + 1) % quotes.length;
+        setQuote(quotes[i]);
+      }, 10000); // rotate every 10s
+    } catch (_) {}
   }
 }
 
