@@ -762,6 +762,7 @@ class ArticleDisplay {
     let tool = 'pen';
     let color = '#4c6ef5';
     let size = 6;
+    let opacity = 1;
 
     const colorEl = document.getElementById('calmColor');
     const sizeEl = document.getElementById('calmSize');
@@ -769,6 +770,7 @@ class ArticleDisplay {
     const eraserBtn = document.getElementById('calmEraserBtn');
     const clearBtn = document.getElementById('calmClearBtn');
     const statusEl = document.getElementById('calmStatus');
+    const opacityEl = document.getElementById('calmOpacity');
 
     const resize = () => {
       const rect = canvas.parentElement.getBoundingClientRect();
@@ -817,7 +819,15 @@ class ArticleDisplay {
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.lineWidth = size;
-      ctx.strokeStyle = tool === 'pen' ? color : '#ffffff';
+      if (tool === 'pen') {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = opacity;
+        ctx.strokeStyle = color;
+      } else {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = '#000000';
+      }
       ctx.lineTo(x, y);
       ctx.stroke();
     };
@@ -830,9 +840,24 @@ class ArticleDisplay {
     window.addEventListener('pointercancel', end);
 
     colorEl?.addEventListener('input', (e) => { color = e.target.value; });
+    document.querySelectorAll('.calm-swatch').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        const c = ev.currentTarget.getAttribute('data-color');
+        if (c) { color = c; if (colorEl) colorEl.value = c; }
+      });
+    });
     sizeEl?.addEventListener('input', (e) => { size = parseInt(e.target.value || '6', 10); });
-    penBtn?.addEventListener('click', () => { tool = 'pen'; penBtn.classList.remove('btn-secondary'); eraserBtn.classList.add('btn-secondary'); });
-    eraserBtn?.addEventListener('click', () => { tool = 'eraser'; eraserBtn.classList.remove('btn-secondary'); penBtn.classList.add('btn-secondary'); });
+    opacityEl?.addEventListener('input', (e) => { opacity = parseFloat(e.target.value || '1') || 1; });
+    penBtn?.addEventListener('click', () => {
+      tool = 'pen';
+      penBtn.classList.remove('btn-secondary');
+      eraserBtn.classList.add('btn-secondary');
+    });
+    eraserBtn?.addEventListener('click', () => {
+      tool = 'eraser';
+      eraserBtn.classList.remove('btn-secondary');
+      penBtn.classList.add('btn-secondary');
+    });
     clearBtn?.addEventListener('click', async () => { ctx.clearRect(0, 0, canvas.width, canvas.height); await save(); });
 
     // Toggle card visibility
