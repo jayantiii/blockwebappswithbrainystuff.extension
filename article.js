@@ -48,6 +48,8 @@ class ArticleDisplay {
     window.addEventListener('resize', () => this.alignTodoDock());
     this.startSubtitleRotator();
     this.initCalmBoard();
+    // Preload summarizer in background
+    this.preloadSummarizer();
   }
 
   async prepareArticles() {
@@ -214,6 +216,82 @@ class ArticleDisplay {
       .replace(/'/g, '&#039;');
   }
   
+  markdownToHtml(markdown) {
+    if (!markdown) return '';
+    let html = String(markdown);
+    
+    // Escape HTML first
+    html = this.escapeHtml(html);
+    
+    // Convert bullet points (* item or - item) to list items
+    // Do this BEFORE bold/italic conversion to protect bullet asterisks
+    const lines = html.split('\n');
+    let inList = false;
+    const processed = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i];
+      const trimmed = line.trim();
+      // Check for bullet point patterns (must be at start of trimmed line)
+      const bulletMatch = trimmed.match(/^[\*\-]\s+(.+)$/);
+      
+      if (bulletMatch) {
+        if (!inList) {
+          processed.push('<ul>');
+          inList = true;
+        }
+        // Extract the content and convert any markdown within it
+        const content = bulletMatch[1];
+        // Protect this line - replace bullet asterisk with placeholder
+        processed.push(`___BULLET_ITEM___${content}___BULLET_END___`);
+      } else {
+        if (inList) {
+          processed.push('</ul>');
+          inList = false;
+        }
+        processed.push(line);
+      }
+    }
+    
+    if (inList) {
+      processed.push('</ul>');
+    }
+    
+    html = processed.join('\n');
+    
+    // Now do bold/italic conversion (bullet asterisks are protected)
+    html = html.replace(/\*\*([^*]+?)\*\*/g, '___BOLD_PLACEHOLDER___$1___BOLD_END___');
+    html = html.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
+    html = html.replace(/___BOLD_PLACEHOLDER___([^_]+?)___BOLD_END___/g, '<strong>$1</strong>');
+    
+    // Restore bullet points
+    html = html.replace(/___BULLET_ITEM___([^_]+?)___BULLET_END___/g, '<li>$1</li>');
+    
+    // Convert remaining paragraphs (text not in lists)
+    html = html.replace(/\n\n+/g, '</p><p>');
+    
+    // Wrap standalone paragraphs (not already in tags)
+    const finalLines = html.split('\n');
+    const wrapped = [];
+    for (let line of finalLines) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.match(/^<[uodl]|^<\/[uodl]|^<li|^<\/li|^<p|^<\/p|^<strong|^<\/strong|^<em|^<\/em/)) {
+        if (!trimmed.startsWith('<')) {
+          wrapped.push(`<p>${trimmed}</p>`);
+        } else {
+          wrapped.push(line);
+        }
+      } else if (!trimmed) {
+        wrapped.push('<br>');
+      } else {
+        wrapped.push(line);
+      }
+    }
+    html = wrapped.join('\n');
+    
+    return html;
+  }
+  
   async loadTimerState() {
     try {
       const result = await chrome.storage.local.get('timerState');
@@ -258,22 +336,23 @@ class ArticleDisplay {
     articleCard.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
         <div class="article-category">${article.category}</div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          ${article.sourceUrl ? `<button class=\"btn\" id=\"readInPageBtn\">📰 Read in page</button>
-          <a class=\"btn btn-secondary\" href=\"${article.sourceUrl}\" target=\"_blank\" rel=\"noreferrer\">Open in new tab</a>` : ''}
-          <div id="translateControls" style="display:flex;gap:8px;align-items:center;">
-            <select id="translateLang" class="inline-select" aria-label="Translate language">
-              <option value="en">English</option>
-              <option value="es">Español</option>
-              <option value="ja">日本語</option>
-            </select>
-            <button class="btn btn-secondary" id="translateBtn">Translate</button>
-            <button class="btn btn-secondary" id="translateResetBtn" style="display:none;">Original</button>
-          </div>
+        <div id="translateControls" style="display:flex;gap:8px;align-items:center;">
+          <select id="translateLang" class="inline-select" aria-label="Translate language">
+            <option value="en">English</option>
+            <option value="es">Español</option>
+            <option value="ja">日本語</option>
+          </select>
+          <button class="btn btn-secondary" id="translateBtn">Translate</button>
+          <button class="btn btn-secondary" id="translateResetBtn" style="display:none;">Original</button>
         </div>
       </div>
       <h2 class="article-title">${article.title}</h2>
       <div class="article-content">${article.content}</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:20px;padding-top:20px;border-top:1px solid #e5e7eb;">
+        ${article.sourceUrl ? `<button class=\"btn\" id=\"readInPageBtn\">📰 Read in page</button>
+        <a class=\"btn btn-secondary\" href=\"${article.sourceUrl}\" target=\"_blank\" rel=\"noreferrer\">Open in new tab</a>` : ''}
+        <button class="btn btn-secondary" id="summarizeBtn">📝 Summarize</button>
+      </div>
     `;
 
     // Wire up in-page reader
@@ -283,6 +362,14 @@ class ArticleDisplay {
         e.preventDefault();
         this.openReader(article.title, article.sourceUrl);
       });
+    }
+
+    // Wire summarizer
+    const summarizeBtn = document.getElementById('summarizeBtn');
+    if (summarizeBtn) {
+      summarizeBtn.onclick = async () => {
+        await this.summarizeCurrentArticle();
+      };
     }
 
     // Wire translator
@@ -298,29 +385,60 @@ class ArticleDisplay {
     if (resetBtn) {
       resetBtn.onclick = () => this.resetTranslatedArticle();
     }
-    // Initialize translator control state
+    // Initialize translator and summarizer control states
     this.updateTranslateControls();
+    this.updateSummarizeControls();
   }
 
   async translateCurrentArticle(targetLanguage) {
     try {
       console.log('Translate requested ->', targetLanguage);
-      const translator = await this.getTranslator(targetLanguage);
-      if (!translator) {
-        console.warn('Translator unavailable or still downloading');
-        this.showNotification('Translator unavailable or still downloading');
-        return;
+      const result = await this.getTranslator(targetLanguage);
+      
+      if (result.status === 'ready' && result.translator) {
+        const contentEl = document.querySelector('#articleCard .article-content');
+        if (!contentEl) return;
+        if (!this._originalArticleHtml) this._originalArticleHtml = contentEl.innerHTML;
+        const text = contentEl.innerText || '';
+        const translated = await result.translator.translate(text);
+        contentEl.innerHTML = `<p>${this.escapeHtml(translated).replace(/\n+/g, '</p><p>')}</p>`;
+        const resetBtn = document.getElementById('translateResetBtn');
+        if (resetBtn) resetBtn.style.display = 'inline-block';
+      } else if (result.status === 'needs-download') {
+        // User gesture detected - attempt to trigger download
+        try {
+          const T = window.ai?.translator;
+          if (T) {
+            // Trigger download by attempting create (user gesture required)
+            this._translatorTarget = targetLanguage;
+            this._translatorInflight = Promise.race([
+              T.create({ sourceLanguage: 'auto', targetLanguage }),
+              new Promise((_, r) => setTimeout(() => r(new Error('create-timeout')), 30000))
+            ]);
+            this._translator = await this._translatorInflight;
+            this._translatorInflight = null;
+            // Retry translation after download
+            await this.translateCurrentArticle(targetLanguage);
+          }
+        } catch (e) {
+          if (this?.showNotification) {
+            this.showNotification('Downloading translation model… please wait and try again.');
+          }
+        }
+      } else if (result.status === 'unsupported-target') {
+        if (this?.showNotification) {
+          this.showNotification(`Translation to ${targetLanguage} is not supported.`);
+        }
+      } else {
+        if (this?.showNotification) {
+          this.showNotification('Translator unavailable');
+        }
       }
-      const contentEl = document.querySelector('#articleCard .article-content');
-      if (!contentEl) return;
-      if (!this._originalArticleHtml) this._originalArticleHtml = contentEl.innerHTML;
-      const text = contentEl.innerText || '';
-      const translated = await translator.translate(text);
-      contentEl.innerHTML = `<p>${this.escapeHtml(translated).replace(/\n+/g, '</p><p>')}</p>`;
-      const resetBtn = document.getElementById('translateResetBtn');
-      if (resetBtn) resetBtn.style.display = 'inline-block';
     } catch (e) {
-      this.showNotification('Translation failed');
+      console.error('Translation error:', e);
+      if (this?.showNotification) {
+        this.showNotification('Translation failed');
+      }
     }
   }
 
@@ -332,26 +450,428 @@ class ArticleDisplay {
     if (resetBtn) resetBtn.style.display = 'none';
   }
 
+  async summarizeCurrentArticle() {
+    try {
+      console.log('Summarize requested');
+      const result = await this.getSummarizer();
+      
+      if (result.status === 'ready' && result.summarizer) {
+        const articleCard = this.$('articleCard');
+        if (!articleCard) return;
+        
+        // Get title and content
+        const titleEl = articleCard.querySelector('.article-title');
+        const contentEl = articleCard.querySelector('.article-content');
+        if (!contentEl) return;
+        
+        // Store original if not already stored (and not translated)
+        if (!this._originalArticleHtml) {
+          this._originalArticleHtml = contentEl.innerHTML;
+        }
+        
+        // Get clean text: title + content
+        const titleText = titleEl ? (titleEl.innerText || titleEl.textContent || '').trim() : '';
+        const contentText = contentEl.innerText || contentEl.textContent || '';
+        const fullText = titleText ? `${titleText}\n\n${contentText}` : contentText;
+        
+        if (!fullText || fullText.length < 50) {
+          if (this?.showNotification) {
+            this.showNotification('Article too short to summarize');
+          }
+          return;
+        }
+
+        // Show loading state
+        const summarizeBtn = document.getElementById('summarizeBtn');
+        if (summarizeBtn) {
+          summarizeBtn.disabled = true;
+          summarizeBtn.textContent = '⏳ Summarizing...';
+        }
+
+        try {
+          console.log('Summarizing text length:', fullText.length);
+          
+          // Request longer, detailed summary with options
+          let summary;
+          try {
+            // Try with options for longer summary
+            const summaryOptions = {
+              length: 'long',
+              format: 'paragraphs',
+              maxLength: 'long' // Request maximum length
+            };
+            summary = await result.summarizer.summarize(fullText, summaryOptions);
+          } catch (e1) {
+            // Fallback 1: Try with simpler options
+            try {
+              summary = await result.summarizer.summarize(fullText, { length: 'long' });
+            } catch (e2) {
+              // Fallback 2: Basic summarize
+              console.log('Using basic summarize (options not supported)');
+              summary = await result.summarizer.summarize(fullText);
+            }
+          }
+          
+          // If summary is too short or contains placeholder text, enhance it using languageModel
+          const hasPlaceholders = summary && /\[.*?\]|insert|placeholder|briefly describe|replace.*with/i.test(summary);
+          
+          if ((summary && summary.length < 200) || hasPlaceholders) {
+            try {
+              const LM = window.ai?.languageModel ?? globalThis.LanguageModel;
+              if (LM) {
+                const availability = typeof LM.availability === 'function' ? await LM.availability() : null;
+                if (availability && availability !== 'unavailable') {
+                  const params = typeof LM.params === 'function' ? await LM.params() : null;
+                  const session = await LM.create({
+                    temperature: 0.3, // Lower temperature for more factual content
+                    topK: Math.min(8, params?.maxTopK ?? 8),
+                    outputLanguage: 'en'
+                  });
+                  
+                  // Create a better prompt that includes context and explicitly avoids placeholders
+                  const articlePreview = fullText.slice(0, 1000); // First 1000 chars for context
+                  const enhancePrompt = `Based ONLY on the following article content, create a detailed summary (200-400 words). 
+                  
+IMPORTANT: 
+- Use ONLY information from the article below
+- Do NOT use placeholders like [Insert...], [Briefly describe...], or any bracketed instructions
+- Do NOT invent or add information not present in the article
+- Focus on the main points, key facts, and important details from the actual article
+
+Article:
+${articlePreview}
+
+${summary && summary.length > 50 ? `\nCurrent summary (may contain errors - correct based on article):\n${summary}` : ''}
+
+Write a clear, detailed summary based on the article content above:`;
+
+                  const enhanced = await session.prompt(enhancePrompt, { outputLanguage: 'en' });
+                  session.destroy?.();
+                  
+                  // Validate enhanced summary doesn't contain placeholders
+                  if (enhanced && !/\[.*?\]|insert.*here|briefly describe|replace.*with/i.test(enhanced)) {
+                    if (enhanced.length > summary.length || hasPlaceholders) {
+                      summary = enhanced;
+                    }
+                  }
+                }
+              }
+            } catch (e3) {
+              console.log('Enhancement skipped:', e3);
+            }
+          }
+          
+          // Final validation: if summary still has placeholders, try one more time with just the article
+          if (summary && /\[.*?\]|insert.*here|briefly describe/i.test(summary)) {
+            console.warn('Summary contains placeholders, attempting to regenerate');
+            try {
+              const LM = window.ai?.languageModel ?? globalThis.LanguageModel;
+              if (LM) {
+                const availability = typeof LM.availability === 'function' ? await LM.availability() : null;
+                if (availability && availability !== 'unavailable') {
+                  const params = typeof LM.params === 'function' ? await LM.params() : null;
+                  const session = await LM.create({
+                    temperature: 0.3,
+                    topK: Math.min(8, params?.maxTopK ?? 8),
+                    outputLanguage: 'en'
+                  });
+                  
+                  const articleText = fullText.slice(0, 2000); // Use first 2000 chars
+                  const regenPrompt = `Summarize the following article in 200-400 words. Use ONLY facts from the article. No placeholders, no [Insert...] text, no instructions.
+
+Article:
+${articleText}
+
+Summary:`;
+                  
+                  const regen = await session.prompt(regenPrompt, { outputLanguage: 'en' });
+                  session.destroy?.();
+                  
+                  if (regen && !/\[.*?\]|insert|placeholder|briefly describe/i.test(regen)) {
+                    summary = regen;
+                  }
+                }
+              }
+            } catch (e4) {
+              console.log('Regeneration skipped:', e4);
+            }
+          }
+          
+          const summarizeBtn = document.getElementById('summarizeBtn');
+          if (summarizeBtn) {
+            summarizeBtn.disabled = false;
+            summarizeBtn.textContent = '📝 Summarize';
+          }
+          
+          // Make summary the primary view - scroll to top and show prominently
+          contentEl.innerHTML = `
+            <div id="summarySection" style="background:linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);border-left:4px solid #0ea5e9;padding:24px;margin-bottom:24px;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,0.1);">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+                <h3 style="margin:0;color:#0369a1;font-size:1.3rem;font-weight:600;">📝 AI Summary</h3>
+                <button class="btn btn-secondary" id="showFullArticleBtn" style="margin-left:auto;font-size:0.85rem;">Show Full Article</button>
+              </div>
+              <div style="color:#1e3a8a;line-height:1.8;font-size:1.05rem;">${this.markdownToHtml(summary)}</div>
+            </div>
+            <div id="fullArticleSection" style="display:none;border-top:2px solid #e5e7eb;padding-top:20px;margin-top:20px;">
+              <button class="btn btn-secondary" id="hideFullArticleBtn" style="margin-bottom:12px;font-size:0.85rem;">Hide Full Article</button>
+              <h4 style="margin:0 0 12px 0;opacity:0.8;">Full Article</h4>
+              ${this._originalArticleHtml}
+            </div>
+          `;
+          
+          // Wire up show/hide buttons
+          const showBtn = document.getElementById('showFullArticleBtn');
+          const hideBtn = document.getElementById('hideFullArticleBtn');
+          const fullSection = document.getElementById('fullArticleSection');
+          if (showBtn && fullSection) {
+            showBtn.onclick = () => {
+              fullSection.style.display = 'block';
+              showBtn.style.display = 'none';
+              fullSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+          }
+          if (hideBtn && fullSection) {
+            hideBtn.onclick = () => {
+              fullSection.style.display = 'none';
+              if (showBtn) showBtn.style.display = 'inline-block';
+              document.getElementById('summarySection')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+          }
+          
+          // Scroll to summary
+          setTimeout(() => {
+            const summarySection = document.getElementById('summarySection');
+            if (summarySection) {
+              summarySection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+          }, 100);
+        } catch (e) {
+          console.error('Summarization error:', e);
+          if (this?.showNotification) {
+            this.showNotification('Summarization failed');
+          }
+          const summarizeBtn = document.getElementById('summarizeBtn');
+          if (summarizeBtn) {
+            summarizeBtn.disabled = false;
+            summarizeBtn.textContent = '📝 Summarize';
+          }
+        }
+      } else if (result.status === 'needs-download') {
+        // User gesture detected - attempt to trigger download
+        try {
+          const S = window.ai?.summarizer ?? globalThis.Summarizer;
+          if (S) {
+            // Trigger download by attempting create (user gesture required) - with outputLanguage
+            this._summarizerInflight = Promise.race([
+              S.create({ outputLanguage: 'en' }),
+              new Promise((_, r) => setTimeout(() => r(new Error('create-timeout')), 30000))
+            ]);
+            this._summarizer = await this._summarizerInflight;
+            this._summarizerInflight = null;
+            // Retry summarization after download
+            await this.summarizeCurrentArticle();
+          }
+        } catch (e) {
+          if (this?.showNotification) {
+            this.showNotification('Downloading summarizer model… please wait and try again.');
+          }
+        }
+      } else if (result.status === 'unavailable') {
+        if (this?.showNotification) {
+          this.showNotification('Summarizer unavailable. Ensure Chrome AI features are enabled.');
+        }
+      } else if (result.status === 'error') {
+        if (this?.showNotification) {
+          this.showNotification('Summarization failed. Please try again.');
+        }
+      } else {
+        if (this?.showNotification) {
+          this.showNotification('Summarizer unavailable');
+        }
+      }
+    } catch (e) {
+      console.error('Summarization error:', e);
+      if (this?.showNotification) {
+        this.showNotification('Summarization failed');
+      }
+    }
+  }
+
+  async preloadSummarizer() {
+    // Preload summarizer in background for faster summarization
+    try {
+      const result = await this.getSummarizer();
+      if (result.status === 'ready') {
+        console.log('Summarizer preloaded successfully');
+      }
+    } catch (e) {
+      console.log('Summarizer preload failed (will retry on use):', e);
+    }
+  }
+
+  async getSummarizer() {
+    try {
+      const S = window.ai?.summarizer ?? globalThis.Summarizer;
+      if (!S) {
+        console.warn('Summarizer API not found. Available:', Object.keys(window.ai || {}));
+        return { summarizer: null, status: 'unavailable' };
+      }
+
+      // Reuse instance if already created
+      if (this._summarizer) {
+        return { summarizer: this._summarizer, status: 'ready' };
+      }
+
+      // Check availability same way as languageModel
+      let availability = typeof S.availability === 'function' ? await S.availability() : null;
+      if (!availability && typeof S.capabilities === 'function') {
+        const caps = await S.capabilities();
+        availability = caps?.available === 'readily'
+          ? 'available'
+          : caps?.available === 'after-download'
+          ? 'downloadable'
+          : 'unavailable';
+      }
+      
+      if (availability === 'unavailable' || availability === 'downloading') {
+        return { summarizer: null, status: 'unavailable' };
+      }
+      
+      if (availability === 'downloadable') {
+        if (this?.showNotification) {
+          this.showNotification('Summarizer model needs download. Click again to download.');
+        }
+        return { summarizer: null, status: 'needs-download' };
+      }
+
+      // Debounce concurrent creates - add outputLanguage like languageModel
+      if (!this._summarizerInflight) {
+        this._summarizerInflight = Promise.race([
+          S.create({ outputLanguage: 'en' }),
+          new Promise((_, r) => setTimeout(() => r(new Error('create-timeout')), 15000))
+        ]);
+      }
+
+      this._summarizer = await this._summarizerInflight;
+      this._summarizerInflight = null;
+
+      return { summarizer: this._summarizer, status: 'ready' };
+    } catch (err) {
+      console.warn('getSummarizer failed:', err);
+      this._summarizerInflight = null;
+      
+      // If error is about download, return needs-download status
+      if (err?.message?.includes('download') || err?.message?.includes('Download')) {
+        return { summarizer: null, status: 'needs-download' };
+      }
+      
+      return { summarizer: null, status: 'error' };
+    }
+  }
+
+  async updateSummarizeControls() {
+    const summarizeBtn = document.getElementById('summarizeBtn');
+    if (!summarizeBtn) return;
+    
+    // Always show the button - let error handling deal with unavailability
+    summarizeBtn.style.display = 'inline-block';
+    summarizeBtn.disabled = false;
+    summarizeBtn.style.opacity = '';
+    
+    try {
+      const S = window.ai?.summarizer ?? globalThis.Summarizer;
+      console.log('Summarizer API check:', { 
+        hasWindowAi: !!window.ai, 
+        hasSummarizer: !!(window.ai?.summarizer),
+        hasGlobalSummarizer: !!globalThis.Summarizer
+      });
+      
+      if (!S) {
+        console.warn('Summarizer API not found. Available APIs:', Object.keys(window.ai || {}));
+        summarizeBtn.title = 'Summarizer API not detected - will attempt on click';
+        return;
+      }
+      
+      // Check availability same way as languageModel
+      let availability = typeof S.availability === 'function' ? await S.availability() : null;
+      if (!availability && typeof S.capabilities === 'function') {
+        const caps = await S.capabilities();
+        availability = caps?.available === 'readily'
+          ? 'available'
+          : caps?.available === 'after-download'
+          ? 'downloadable'
+          : 'unavailable';
+      }
+      
+      console.log('Summarizer availability:', availability);
+      
+      if (availability === 'unavailable' || availability === 'downloading') {
+        summarizeBtn.title = 'Summarizer not available';
+        summarizeBtn.disabled = false; // Still allow click to show proper error
+        return;
+      }
+      
+      if (availability === 'downloadable') {
+        summarizeBtn.title = 'Click to download summarizer model (requires user gesture)';
+        return;
+      }
+      
+      // Ready to use
+      summarizeBtn.title = 'Generate AI summary of this article';
+    } catch (err) {
+      console.error('updateSummarizeControls error:', err);
+      summarizeBtn.title = 'Click to try summarization';
+    }
+  }
+
   async getTranslator(targetLanguage) {
     try {
       const T = window.ai?.translator;
-      if (!T) {
-        console.warn('window.ai.translator missing');
-        return null;
+      if (!T) return { translator: null, status: 'unavailable' };
+
+      // Reuse instance if already created for same target
+      if (this._translator && this._translatorTarget === targetLanguage) {
+        return { translator: this._translator, status: 'ready' };
       }
-      const caps = await T.capabilities?.();
+
+      const caps = typeof T.capabilities === 'function' ? await T.capabilities() : null;
       console.log('Translator capabilities:', caps);
-      if (caps && caps.available === 'after-download') {
-        console.log('Translator model needs download. Trigger via user gesture and wait...');
-        this.showNotification('Downloading translation model… try again shortly');
-        return null;
+
+      if (!caps || caps.available === 'no') {
+        return { translator: null, status: 'unavailable' };
       }
-      if (caps && caps.available === 'no') {
-        console.warn('Translator not available');
-        return null;
+      if (caps.available === 'after-download') {
+        if (this?.showNotification) {
+          this.showNotification('Downloading translation model… try again shortly');
+        }
+        return { translator: null, status: 'needs-download' };
       }
-      return await T.create({ sourceLanguage: 'auto', targetLanguage });
-    } catch (_) { return null; }
+
+      // Optional: guard unsupported targets if exposed
+      const targets = caps?.targetLanguages || caps?.languages?.target;
+      if (Array.isArray(targets) && !targets.includes(targetLanguage)) {
+        console.warn('Unsupported targetLanguage:', targetLanguage);
+        return { translator: null, status: 'unsupported-target' };
+      }
+
+      // Debounce concurrent creates
+      if (!this._translatorInflight || this._translatorTarget !== targetLanguage) {
+        this._translatorTarget = targetLanguage;
+        this._translatorInflight = Promise.race([
+          T.create({ sourceLanguage: 'auto', targetLanguage }),
+          new Promise((_, r) => setTimeout(() => r(new Error('create-timeout')), 15000))
+        ]);
+      }
+
+      this._translator = await this._translatorInflight;
+      this._translatorInflight = null;
+
+      return { translator: this._translator, status: 'ready' };
+    } catch (err) {
+      console.warn('getTranslator failed:', err);
+      this._translatorInflight = null;
+      return { translator: null, status: 'error' };
+    }
   }
 
   async updateTranslateControls() {
@@ -360,6 +880,7 @@ class ArticleDisplay {
     const langSel = document.getElementById('translateLang');
     const container = document.getElementById('translateControls');
     if (!translateBtn || !langSel || !container) return;
+    
     const disable = (msg) => {
       translateBtn.disabled = true;
       langSel.disabled = true;
@@ -368,6 +889,7 @@ class ArticleDisplay {
       translateBtn.style.opacity = '0.6';
       langSel.style.opacity = '0.6';
     };
+    
     const enable = (msg) => {
       translateBtn.disabled = false;
       langSel.disabled = false;
@@ -376,12 +898,30 @@ class ArticleDisplay {
       translateBtn.style.opacity = '';
       langSel.style.opacity = '';
     };
+    
     try {
       const T = window.ai?.translator;
-      if (!T) { container.style.display = 'none'; return; }
-      const caps = await T.capabilities?.();
-      if (!caps || caps.available === 'no') { container.style.display = 'none'; return; }
-      if (caps.available === 'after-download') { container.style.display = 'none'; return; }
+      if (!T) {
+        container.style.display = 'none';
+        return;
+      }
+      
+      const caps = typeof T.capabilities === 'function' ? await T.capabilities() : null;
+      
+      if (!caps || caps.available === 'no') {
+        container.style.display = 'none';
+        return;
+      }
+      
+      if (caps.available === 'after-download') {
+        // Show controls and enable button so user can trigger download via click
+        container.style.display = 'flex';
+        enable('Click Translate to download translation model');
+        translateBtn.title = 'Click to download translation model (requires user gesture)';
+        return;
+      }
+      
+      // Ready to use
       enable('Translate article');
       container.style.display = 'flex';
       if (resetBtn) resetBtn.title = 'Show original content';
@@ -1133,7 +1673,7 @@ class ArticleDisplay {
       const url = chrome.runtime.getURL('popup.html');
       window.open(url, '_blank', 'noopener');
     } catch (_) {
-      chrome.runtime.sendMessage({ action: 'openPopup' });
+    chrome.runtime.sendMessage({ action: 'openPopup' });
     }
   }
 
