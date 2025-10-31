@@ -1,7 +1,7 @@
 // Article display script for FocusGuard extension
 class ArticleDisplay {
   // Timing constants
-  static FOCUS_SECONDS = 20 * 60;
+  static FOCUS_SECONDS = 12 * 60;
   static BREAK_SECONDS = 5 * 60;
   static ARTICLES_CACHE_MS = 1000 * 60 * 30; // 30 minutes
 
@@ -219,6 +219,14 @@ class ArticleDisplay {
       const result = await chrome.storage.local.get('timerState');
       if (result.timerState) {
         this.timerState = { ...this.timerState, ...result.timerState };
+        // Clamp to 12-minute focus when not on break
+        if (!this.timerState.isBlocked) {
+          const maxFocus = 12 * 60;
+          if (typeof this.timerState.timeRemaining === 'number' && this.timerState.timeRemaining > maxFocus) {
+            this.timerState.timeRemaining = maxFocus;
+            await chrome.storage.local.set({ timerState: this.timerState });
+          }
+        }
       }
     } catch (error) {
       console.error('Error loading timer state:', error);
@@ -382,6 +390,9 @@ class ArticleDisplay {
     }
   }
 
+
+  
+
   openReader(title, url) {
     const overlay = this.$('readerOverlay');
     const frame = this.$('readerFrame');
@@ -521,17 +532,24 @@ class ArticleDisplay {
   }
 
   async renderRandomTeaser() {
-    // 1) Instantly show a predefined teaser to avoid initial delay
-    this.renderBuiltinTeaser();
-
-    // 2) In background, try to fetch from AI cache or top-up the cache
     try {
       const cached = await chrome.storage.local.get(['aiTeasersCache', 'aiTeasersLoading']);
       let queue = Array.isArray(cached.aiTeasersCache) ? cached.aiTeasersCache : [];
+      const seen = await this.getSeenAiKeys();
 
-      // If we have an item ready, swap it in immediately
+      // Proactively refill cache if running low (< 5 items)
+      if (queue.length < 5 && !cached.aiTeasersLoading && typeof window.generateAiTeasers === 'function') {
+        this.topUpAiCache();
+      }
+
+      // Try AI first: show an unseen AI teaser if available
       if (queue.length > 0) {
-        const ai = queue.shift();
+        let ai = null;
+        while (queue.length > 0) {
+          const cand = queue.shift();
+          const key = this.makeAiKey(cand);
+          if (!seen.has(key)) { ai = cand; break; }
+        }
         await chrome.storage.local.set({ aiTeasersCache: queue });
         if (ai && ai.question && ai.answer) {
           const title = ai.title || 'Brain Teaser';
@@ -540,25 +558,49 @@ class ArticleDisplay {
           this.renderTeaser(title, `<p>${this.escapeHtml(question)}</p>`, (inputEl, resultEl) => {
             const val = (inputEl.value || '').trim().toLowerCase();
             resultEl.textContent = val === answer ? 'Correct! ✅' : 'Try again ❌';
-          }, { ai: true, hint: this.makeHintFromAnswer(answer) });
+          }, { ai: true, hint: this.makeHintFromAnswer(answer), answer });
+          await this.addSeenAiKey(this.makeAiKey(ai));
+
+          // Proactively top-up cache if running low (< 5 items)
+          if (queue.length < 5 && !cached.aiTeasersLoading && typeof window.generateAiTeasers === 'function') {
+            this.topUpAiCache();
+          }
           return;
         }
       }
 
-      // Otherwise, top-up cache once per click if not already loading
+      // Fallback: show built-in immediately
+      this.renderBuiltinTeaser();
+
+      // Top-up in background if not already loading
       if (!cached.aiTeasersLoading && typeof window.generateAiTeasers === 'function') {
-        await chrome.storage.local.set({ aiTeasersLoading: true });
-        window.generateAiTeasers(5)
-          .then(async list => {
-            if (Array.isArray(list) && list.length) {
-              await chrome.storage.local.set({ aiTeasersCache: list });
-            }
-          })
-          .finally(async () => {
-            await chrome.storage.local.set({ aiTeasersLoading: false });
-          });
+        this.topUpAiCache();
       }
-    } catch (_) { /* ignore */ }
+    } catch (_) {
+      this.renderBuiltinTeaser();
+    }
+  }
+
+  async topUpAiCache() {
+    try {
+      await chrome.storage.local.set({ aiTeasersLoading: true });
+      const seenSet = await this.getSeenAiKeys();
+      const avoidList = Array.from(seenSet).slice(-10).map(k => (k.split('::')[0] || ''));
+      window.generateAiTeasers(12, avoidList)
+        .then(async list => {
+          if (Array.isArray(list) && list.length) {
+            const seen2 = await this.getSeenAiKeys();
+            const filtered = list.filter(t => !seen2.has(this.makeAiKey(t)));
+            const { aiTeasersCache } = await chrome.storage.local.get('aiTeasersCache');
+            const existing = Array.isArray(aiTeasersCache) ? aiTeasersCache : [];
+            const combined = [...existing, ...filtered];
+            await chrome.storage.local.set({ aiTeasersCache: combined });
+          }
+        })
+        .finally(async () => {
+          await chrome.storage.local.set({ aiTeasersLoading: false });
+        });
+    } catch (_) {}
   }
 
   renderBuiltinTeaser() {
@@ -567,7 +609,22 @@ class ArticleDisplay {
       () => this.teaserWordScramble(),
       () => this.teaserNumberSequence(),
       () => this.teaserPatternLogic(),
-      () => this.teaserQuickRiddle()
+      () => this.teaserQuickRiddle(),
+      () => this.teaserOddOneOut(),
+      () => this.teaserAnalogy(),
+      () => this.teaserAnagram(),
+      () => this.teaserQuickMath(),
+      () => this.teaserLateral(),
+      () => this.teaserRiddle2(),
+      () => this.teaserWordplay(),
+      () => this.teaserLogicPuzzle(),
+      () => this.teaserMathPuzzle(),
+      () => this.teaserCodeBreak(),
+      () => this.teaserVisualPattern(),
+      () => this.teaserReversal(),
+      () => this.teaserMissingLink(),
+      () => this.teaserWordChain(),
+      () => this.teaserTrivia()
     ];
     const pick = teasers[Math.floor(Math.random() * teasers.length)];
     pick();
@@ -580,7 +637,7 @@ class ArticleDisplay {
     this.renderTeaser(title, `<p>${question}</p>`, (inputEl, resultEl) => {
       const val = (inputEl.value || '').trim();
       resultEl.textContent = val === answer ? 'Correct! ✅' : 'Try again ❌';
-    });
+    }, { answer });
   }
 
   teaserWordScramble() {
@@ -592,7 +649,7 @@ class ArticleDisplay {
     this.renderTeaser(title, `<p>${prompt}</p>`, (inputEl, resultEl) => {
       const val = (inputEl.value || '').trim().toLowerCase();
       resultEl.textContent = val === original ? 'Correct! ✅' : 'Not quite ❌';
-    });
+    }, { answer: original });
   }
 
   teaserNumberSequence() {
@@ -607,7 +664,7 @@ class ArticleDisplay {
     this.renderTeaser(title, `<p>${prompt}</p>`, (inputEl, resultEl) => {
       const val = (inputEl.value || '').trim();
       resultEl.textContent = val === pick.answer ? 'Correct! ✅' : `Hint: ${pick.rule}`;
-    }, { hint: `Think: ${pick.rule}` });
+    }, { hint: `Think: ${pick.rule}`, answer: pick.answer });
   }
 
   teaserPatternLogic() {
@@ -617,17 +674,201 @@ class ArticleDisplay {
     this.renderTeaser(title, `<p>${this.escapeHtml(desc)}</p>`, (inputEl, resultEl) => {
       const val = (inputEl.value || '').trim().toUpperCase().replace(/\s+/g,'');
       resultEl.textContent = val === 'G,7' || val === 'G,7'.replace(',','') ? 'Correct! ✅' : 'Try again ❌';
-    }, { hint: 'Skip letters by 2; numbers +2' });
+    }, { hint: 'Skip letters by 2; numbers +2', answer });
   }
 
   teaserQuickRiddle() {
     const title = 'Quick Riddle';
-    const q = 'What has keys but can’t open locks?';
+    const q = 'What has keys but can\'t open locks?';
     const answer = 'piano';
     this.renderTeaser(title, `<p>${this.escapeHtml(q)}</p>`, (inputEl, resultEl) => {
       const val = (inputEl.value || '').trim().toLowerCase();
       resultEl.textContent = val === answer ? 'Correct! ✅' : 'Try again ❌';
-    }, { hint: 'It makes music' });
+    }, { hint: 'It makes music', answer });
+  }
+
+  teaserOddOneOut() {
+    const title = 'Odd One Out';
+    const items = ['Mercury', 'Venus', 'Pluto', 'Earth'];
+    const answer = 'Pluto';
+    const q = `Which is the odd one out: ${items.join(', ')}?`;
+    this.renderTeaser(title, `<p>${this.escapeHtml(q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val === answer.toLowerCase() ? 'Correct! ✅' : 'Hint: Dwarf planet';
+    }, { hint: 'Think classification', answer });
+  }
+
+  teaserAnalogy() {
+    const title = 'Analogy';
+    const q = 'Hand is to glove as foot is to ____?';
+    const answer = 'sock';
+    this.renderTeaser(title, `<p>${this.escapeHtml(q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val === answer ? 'Correct! ✅' : 'Try again ❌';
+    }, { hint: 'Clothing', answer });
+  }
+
+  teaserAnagram() {
+    const title = 'Anagram';
+    const word = 'listen';
+    const answer = 'silent';
+    const q = `Find an anagram of "${word.toUpperCase()}"`;
+    this.renderTeaser(title, `<p>${this.escapeHtml(q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val === answer ? 'Correct! ✅' : 'Not quite ❌';
+    }, { hint: 'Starts with S', answer });
+  }
+
+  teaserQuickMath() {
+    const title = 'Quick Math';
+    const q = 'What is 15% of 200?';
+    const answer = '30';
+    this.renderTeaser(title, `<p>${this.escapeHtml(q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim();
+      resultEl.textContent = val === answer ? 'Correct! ✅' : 'Try again ❌';
+    }, { hint: '10% + 5%', answer });
+  }
+
+  teaserLateral() {
+    const title = 'Lateral Thinking';
+    const q = 'A man pushes his car to a hotel and loses his fortune. What happened?';
+    const answer = 'monopoly';
+    this.renderTeaser(title, `<p>${this.escapeHtml(q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val.includes(answer) ? 'Correct! ✅' : 'Think board games 🎲';
+    }, { hint: 'Board game', answer });
+  }
+
+  teaserRiddle2() {
+    const riddles = [
+      { q: 'I speak without a mouth and hear without ears. I have no body but come alive with wind. What am I?', a: 'echo' },
+      { q: 'The more you take, the more you leave behind. What am I?', a: 'footsteps' },
+      { q: 'I have cities but no houses, forests but no trees, and water but no fish. What am I?', a: 'map' }
+    ];
+    const pick = riddles[Math.floor(Math.random() * riddles.length)];
+    this.renderTeaser('Riddle', `<p>${this.escapeHtml(pick.q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val.includes(pick.a) ? 'Correct! ✅' : 'Think carefully 🧠';
+    }, { hint: 'Think outside the box', answer: pick.a });
+  }
+
+  teaserWordplay() {
+    const puzzles = [
+      { q: 'What word becomes shorter when you add two letters?', a: 'short' },
+      { q: 'What has 4 eyes but cannot see?', a: 'mississippi' },
+      { q: 'What starts with E, ends with E, but only contains one letter?', a: 'envelope' }
+    ];
+    const pick = puzzles[Math.floor(Math.random() * puzzles.length)];
+    this.renderTeaser('Wordplay', `<p>${this.escapeHtml(pick.q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val.includes(pick.a) ? 'Correct! ✅' : 'Play with words 🔤';
+    }, { hint: 'Word trick', answer: pick.a });
+  }
+
+  teaserLogicPuzzle() {
+    const puzzles = [
+      { q: 'All roses are flowers. Some flowers fade quickly. Therefore, some roses fade quickly. True or False?', a: 'false' },
+      { q: 'If all cats are mammals, and all mammals are animals, are all cats animals?', a: 'yes' },
+      { q: 'A box contains 3 red balls and 2 blue balls. If you pick one at random, what color are you more likely to get?', a: 'red' }
+    ];
+    const pick = puzzles[Math.floor(Math.random() * puzzles.length)];
+    this.renderTeaser('Logic Puzzle', `<p>${this.escapeHtml(pick.q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val.includes(pick.a) ? 'Correct! ✅' : 'Apply logic 🧩';
+    }, { hint: 'Use reasoning', answer: pick.a });
+  }
+
+  teaserMathPuzzle() {
+    const puzzles = [
+      { q: 'If a train travels 60 mph for 2.5 hours, how far does it go?', a: '150' },
+      { q: 'What is the square root of 144?', a: '12' },
+      { q: 'If 5x + 3 = 18, what is x?', a: '3' },
+      { q: 'How many degrees are in a triangle?', a: '180' }
+    ];
+    const pick = puzzles[Math.floor(Math.random() * puzzles.length)];
+    this.renderTeaser('Math Puzzle', `<p>${this.escapeHtml(pick.q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim();
+      resultEl.textContent = val === pick.a ? 'Correct! ✅' : 'Calculate 🔢';
+    }, { hint: 'Do the math', answer: pick.a });
+  }
+
+  teaserCodeBreak() {
+    const codes = [
+      { q: 'If A=1, B=2, C=3... what does CODE spell in numbers?', a: '3,15,4,5' },
+      { q: 'ROT13: What is "EBG13" in plain text?', a: 'rot13' },
+      { q: 'In Morse code, what letter is represented by · — · ·?', a: 'c' }
+    ];
+    const pick = codes[Math.floor(Math.random() * codes.length)];
+    this.renderTeaser('Code Break', `<p>${this.escapeHtml(pick.q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val.includes(pick.a) ? 'Correct! ✅' : 'Decode it 🔐';
+    }, { hint: 'Pattern recognition', answer: pick.a });
+  }
+
+  teaserVisualPattern() {
+    const patterns = [
+      { q: 'What comes next: ⭐ ☆ ⭐ ☆ ?', a: '⭐' },
+      { q: 'Pattern: 2, 4, 8, 16, ?', a: '32' },
+      { q: 'ABCD, EFGH, IJKL, ?', a: 'mnop' }
+    ];
+    const pick = patterns[Math.floor(Math.random() * patterns.length)];
+    this.renderTeaser('Visual Pattern', `<p>${this.escapeHtml(pick.q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val.includes(pick.a.toLowerCase()) ? 'Correct! ✅' : 'Find the pattern 🔍';
+    }, { hint: 'Look for repetition', answer: pick.a });
+  }
+
+  teaserReversal() {
+    const reversals = [
+      { q: 'Spell "stressed" backwards.', a: 'desserts' },
+      { q: 'What word reads the same forward and backward?', a: 'racecar' },
+      { q: 'Reverse the word "drawer"', a: 'reward' }
+    ];
+    const pick = reversals[Math.floor(Math.random() * reversals.length)];
+    this.renderTeaser('Reversal', `<p>${this.escapeHtml(pick.q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val.includes(pick.a) ? 'Correct! ✅' : 'Flip it ↪️';
+    }, { hint: 'Reverse order', answer: pick.a });
+  }
+
+  teaserMissingLink() {
+    const links = [
+      { q: 'Complete: Apple, Banana, Cherry, ?', a: 'date' },
+      { q: 'Continue: Monday, Tuesday, Wednesday, ?', a: 'thursday' },
+      { q: 'Sequence: 5, 10, 15, 20, ?', a: '25' }
+    ];
+    const pick = links[Math.floor(Math.random() * links.length)];
+    this.renderTeaser('Missing Link', `<p>${this.escapeHtml(pick.q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val.includes(pick.a) ? 'Correct! ✅' : 'Find the connection 🔗';
+    }, { hint: 'Look for sequence', answer: pick.a });
+  }
+
+  teaserWordChain() {
+    const chains = [
+      { q: 'Word chain: CAT -> BAT -> BAG -> ?', a: 'bug' },
+      { q: 'Change one letter: HATE -> GATE -> ?', a: 'date' },
+      { q: 'Link: DOG -> LOG -> LOT -> ?', a: 'pot' }
+    ];
+    const pick = chains[Math.floor(Math.random() * chains.length)];
+    this.renderTeaser('Word Chain', `<p>${this.escapeHtml(pick.q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val.includes(pick.a) ? 'Correct! ✅' : 'Follow the chain ⛓️';
+    }, { hint: 'One letter changes', answer: pick.a });
+  }
+
+  teaserTrivia() {
+    const trivia = [
+      { q: 'How many continents are there?', a: '7' },
+      { q: 'What planet is known as the Red Planet?', a: 'mars' },
+      { q: 'How many sides does a hexagon have?', a: '6' },
+      { q: 'What is the largest ocean?', a: 'pacific' }
+    ];
+    const pick = trivia[Math.floor(Math.random() * trivia.length)];
+    this.renderTeaser('Trivia', `<p>${this.escapeHtml(pick.q)}</p>`, (inputEl, resultEl) => {
+      const val = (inputEl.value || '').trim().toLowerCase();
+      resultEl.textContent = val.includes(pick.a) ? 'Correct! ✅' : 'Test your knowledge 📚';
+    }, { hint: 'General knowledge', answer: pick.a });
   }
 
   makeHintFromAnswer(answer) {
@@ -635,6 +876,58 @@ class ArticleDisplay {
     const clean = String(answer).replace(/[^a-z0-9]/gi,'');
     if (clean.length <= 2) return `Length: ${clean.length}`;
     return `Starts with: ${clean[0].toUpperCase()}`;
+  }
+
+  // ---- AI Teaser de-dup helpers ----
+  makeAiKey(teaser) {
+    const norm = (s) => String(s || '')
+      .toLowerCase()
+      .replace(/[`~!@#$%^&*()_+\-={}\[\]\\|;:'",.<>/?]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const q = norm(teaser?.question);
+    const a = norm(teaser?.answer);
+    return `${q}::${a}`;
+  }
+
+  async getSeenAiKeys() {
+    try {
+      const { seenAiTeasers } = await chrome.storage.local.get('seenAiTeasers');
+      return new Set(Array.isArray(seenAiTeasers) ? seenAiTeasers : []);
+    } catch (_) { return new Set(); }
+  }
+
+  async addSeenAiKey(key) {
+    if (!key) return;
+    try {
+      const { seenAiTeasers } = await chrome.storage.local.get('seenAiTeasers');
+      const arr = Array.isArray(seenAiTeasers) ? seenAiTeasers : [];
+      arr.push(key);
+      const capped = arr.slice(-1000);
+      await chrome.storage.local.set({ seenAiTeasers: capped });
+    } catch (_) {}
+  }
+
+  // ---- Article de-dup helper (used by older code paths) ----
+  getArticleKey(art) {
+    const url = (art?.sourceUrl || '').toString();
+    if (url) {
+      try {
+        const u = new URL(url);
+        u.search = '';
+        u.hash = '';
+        return u.toString().toLowerCase();
+      } catch (_) {}
+    }
+    return (art?.title || '').toString().toLowerCase();
+  }
+
+  // ---- RSS fetch stub (prevents runtime error if called) ----
+  async fetchRssFeeds(maxTotal = 0) {
+    try {
+      // Intentionally returning empty to avoid network issues; can be filled later
+      return [];
+    } catch (_) { return []; }
   }
 
   renderTeaser(title, html, onCheck, options = {}) {
@@ -656,8 +949,12 @@ class ArticleDisplay {
     const hintBtn = document.createElement('button');
     hintBtn.className = 'btn btn-secondary';
     hintBtn.textContent = 'Hint';
+    const showAnswerBtn = document.createElement('button');
+    showAnswerBtn.className = 'btn btn-secondary';
+    showAnswerBtn.textContent = 'Show Answer';
     tActions.appendChild(checkBtn);
     if (options.hint) tActions.appendChild(hintBtn);
+    tActions.appendChild(showAnswerBtn);
     tActions.appendChild(nextBtn);
     checkBtn.onclick = () => {
       const inputEl = document.getElementById('teaserInput');
@@ -670,6 +967,15 @@ class ArticleDisplay {
         if (resultEl) resultEl.textContent = `Hint: ${options.hint}`;
       };
     }
+    showAnswerBtn.onclick = () => {
+      const resultEl = document.getElementById('teaserResult');
+      if (resultEl && options.answer) {
+        resultEl.textContent = `Answer: ${options.answer}`;
+        resultEl.style.color = '#4CAF50';
+        showAnswerBtn.disabled = true;
+        showAnswerBtn.style.opacity = '0.6';
+      }
+    };
     nextBtn.onclick = () => this.renderRandomTeaser();
   }
 
@@ -726,7 +1032,7 @@ class ArticleDisplay {
     }
     
     // Update progress bar
-    const totalTime = this.timerState.isBlocked ? 5 * 60 : 20 * 60;
+    const totalTime = this.timerState.isBlocked ? 5 * 60 : 12 * 60;
     const progress = ((totalTime - this.timerState.timeRemaining) / totalTime) * 100;
     progressBar.style.width = `${progress}%`;
   }
@@ -756,7 +1062,7 @@ class ArticleDisplay {
     } else {
       // Break completed, start new focus session
       this.timerState.isBlocked = false;
-      this.timerState.timeRemaining = 20 * 60; // 20 minutes focus
+      this.timerState.timeRemaining = 12 * 60; // 12 minutes focus
       
       // Show notification
       this.showNotification('Break time is over! Time to focus again! 🎯');

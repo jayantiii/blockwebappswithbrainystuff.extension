@@ -5,7 +5,7 @@ class FocusGuardBackground {
       isActive: false,
       isBlocked: false,
       isPaused: false,
-      timeRemaining: 20 * 60, // 20 minutes in seconds
+      timeRemaining: 12 * 60, // 12 minutes in seconds
       sessionStartTime: null,
       sessionsCompleted: 0,
       totalFocusedTime: 0
@@ -28,7 +28,19 @@ class FocusGuardBackground {
       const result = await chrome.storage.local.get(['blockedSites', 'timerState', 'dailyStats']);
       this.blockedSites = result.blockedSites || [];
       this.timerState = { ...this.timerState, ...(result.timerState || {}) };
-      
+
+      // Migrate legacy 20-min focus to 12-min
+      if (!this.timerState.isBlocked) {
+        const maxFocus = 12 * 60;
+        if (typeof this.timerState.timeRemaining === 'number' && this.timerState.timeRemaining > maxFocus) {
+          this.timerState.timeRemaining = maxFocus;
+        }
+      }
+      // Normalize break to 5 min
+      if (this.timerState.isBlocked && this.timerState.timeRemaining > 5 * 60) {
+        this.timerState.timeRemaining = 5 * 60;
+      }
+
       // Load daily stats
       const today = new Date().toDateString();
       const dailyStats = result.dailyStats || {};
@@ -123,7 +135,7 @@ class FocusGuardBackground {
     this.timerState.isActive = true;
     this.timerState.isBlocked = false;
     this.timerState.isPaused = false;
-    this.timerState.timeRemaining = 20 * 60; // 20 minutes
+    this.timerState.timeRemaining = 12 * 60; // 12 minutes
     this.timerState.sessionStartTime = Date.now();
     
     this.saveData();
@@ -175,13 +187,13 @@ class FocusGuardBackground {
       this.timerState.isBlocked = true;
       this.timerState.timeRemaining = 5 * 60; // 5 minutes break
       this.timerState.sessionsCompleted++;
-      this.timerState.totalFocusedTime += 20; // 20 minutes focused
+      this.timerState.totalFocusedTime += 12; // 12 minutes focused
       
       this.showNotification('Great job! 🎉 You earned a 5-minute break!');
     } else {
       // Break completed, start new focus session
       this.timerState.isBlocked = false;
-      this.timerState.timeRemaining = 20 * 60; // 20 minutes focus
+      this.timerState.timeRemaining = 12 * 60; // 12 minutes focus
       
       this.showNotification('Break time is over! Time to focus again! 🎯');
     }

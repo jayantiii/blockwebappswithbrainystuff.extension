@@ -30,9 +30,14 @@ class WebsiteBlocker {
   }
   
   checkAndBlock() {
-    const currentUrl = window.location.hostname;
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname || '';
+    // Only consider http/https pages with a non-empty hostname
+    const eligible = (protocol === 'http:' || protocol === 'https:') && hostname.length > 0;
+    if (!eligible) return;
+
     const isBlocked = this.blockedSites.some(site => {
-      return currentUrl.includes(site) || site.includes(currentUrl);
+      return hostname.includes(site) || site.includes(hostname);
     });
     
     // Check if we're on the article page
@@ -48,7 +53,7 @@ class WebsiteBlocker {
     this.timerState.isActive = true;
     this.timerState.isBlocked = false;
     this.timerState.isPaused = false;
-    this.timerState.timeRemaining = 20 * 60; // 20 minutes
+    this.timerState.timeRemaining = 12 * 60; // 12 minutes
     this.timerState.sessionStartTime = Date.now();
     
     // Save timer state
