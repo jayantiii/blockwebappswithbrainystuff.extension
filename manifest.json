@@ -3,7 +3,7 @@
   "name": "Focus the Unfocus",
   "short_name": "Focus the Unfocus",
   "version": "1.0",
-  "description": "Block distracting websites and read interesting articles instead. Stay focused for 20 minutes to earn 5 minutes of access.",
+  "description": "Block distracting websites and read interesting articles instead. Stay focused for 12 minutes to earn 5 minutes of access.",
   "offline_enabled": true,
   "permissions": [
     "storage"

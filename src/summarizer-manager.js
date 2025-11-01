@@ -31,9 +31,9 @@ class SummarizerManager {
         return { summarizer: null, status: 'needs-download' };
       }
 
-      // Always create fresh instance with outputLanguage
+      // Always create fresh instance with outputLanguage to avoid warnings
+      // Don't cache - create fresh each time to ensure outputLanguage is set
       this._summarizer = null;
-      this._summarizerInflight = null;
       
       const summarizer = await Promise.race([
         S.create({ outputLanguage: 'en' }),
@@ -97,13 +97,18 @@ class SummarizerManager {
     }
   }
 
-  async summarize(text, result, markdownToHtml, onNotification) {
+  async summarize(text, result, markdownToHtmlFn, onNotification) {
     try {
+      // Ensure we have a markdownToHtml function
+      const markdownToHtml = markdownToHtmlFn || (AppUtils?.markdownToHtml || ((s) => s));
+      
       let summary;
-      // Always pass outputLanguage in options
+      // Always pass outputLanguage in options - this is required by Chrome API
       try {
         summary = await result.summarizer.summarize(text, { outputLanguage: 'en' });
       } catch (e1) {
+        // If options not supported, fallback to basic call
+        // outputLanguage is already set in create(), but this may still warn
         summary = await result.summarizer.summarize(text);
       }
       
