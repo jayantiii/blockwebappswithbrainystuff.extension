@@ -168,4 +168,4 @@ Open console (F12) and check for:
 
 ## Contact
 
-For issues during testing, check the browser console (F12) for error messages.
+Jayanti Lahoti - jayantirl2001@gmail.com
