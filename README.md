@@ -28,8 +28,8 @@ Focus the Unfocus gamifies productivity by blocking distracting websites for 12-
 
 1. **Clone or download this repository**
    ```bash
-   git clone <repository-url>
-   cd blockwebapps.ext
+   git clone https://github.com/jayantiii/blockwebappswithbrainystuff.extension.git
+   cd blockwebappswithbrainystuff.extension
    ```
 
 2. **Enable Chrome AI Features** (Required for full functionality)
@@ -261,6 +261,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 👤 Author
 
+Jayanti Lahoti - jayantirl2001@gmail.com
 Built for hackathon submission - transforming distractions into learning opportunities.
 
 ## 🙏 Acknowledgments
